@@ -19,6 +19,8 @@ class FactEvent:
     actor: str
     kind: str
     payload: dict[str, Any]
+    request_id: str | None = None
+    user_id: str | None = None
     thread_id: str | None = None
     task_id: str | None = None
     parent_ref: str | None = None
@@ -35,6 +37,7 @@ class BranchRecord:
     run_id: str
     branch_type: str
     status: str
+    source: str = "inferred"
     parent_branch_id: str | None = None
     opened_at_fact_id: str | None = None
     closed_at_fact_id: str | None = None
@@ -53,4 +56,10 @@ class ArtifactRecord:
     producer: str
     payload: dict[str, Any]
     version: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+    created_at: datetime | None = None
+    status: str = "active"
+    confidence: float | None = None
+    supersedes_artifact_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

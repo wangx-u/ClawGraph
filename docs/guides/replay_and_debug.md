@@ -11,4 +11,19 @@ Good replay should show:
 - ranking context
 - export lineage
 
+In early ClawGraph, replay should also surface:
+
+- correlated request groups
+- inferred retry branches
+- attached external artifacts
+
 This makes replay closer to a learning cockpit than a standard trace viewer.
+
+Use replay together with:
+
+- `clawgraph inspect session`
+- `clawgraph inspect request`
+- `clawgraph inspect branch`
+- `clawgraph readiness`
+
+Replay answers "what happened". Inspect and readiness answer "what is usable".

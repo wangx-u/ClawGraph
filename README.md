@@ -46,6 +46,18 @@ The same agent run should support:
 - async RL
 - distillation
 
+Current MVP commands:
+
+- `clawgraph proxy`
+- `clawgraph replay`
+- `clawgraph branches`
+- `clawgraph inspect`
+- `clawgraph semantic append`
+- `clawgraph artifact append`
+- `clawgraph artifact list`
+- `clawgraph readiness`
+- `clawgraph export dataset`
+
 ## Architecture
 
 ```text
@@ -123,6 +135,7 @@ This gives you:
 - minimal runtime changes
 - replay readiness
 - export readiness
+- streaming passthrough for chat-completions
 
 ### Semantics later
 
@@ -136,6 +149,62 @@ When you need richer learning fidelity, add semantic events such as:
 - stop reason
 
 Proxy solves adoption. Semantic contract solves semantic fidelity.
+
+## Core user stories
+
+### Runtime engineer
+
+You own an OpenClaw-style runtime and want to answer:
+
+- which request retried
+- which fallback path won
+- whether the failure was upstream, tool, or routing related
+- which session is slow enough to debug
+
+Start with:
+
+- `clawgraph proxy`
+- `clawgraph inspect session --session latest`
+- `clawgraph inspect request --request-id <id>`
+
+### RL engineer
+
+You want to reuse the same captured run for:
+
+- SFT warm starts
+- binary RL samples
+- preference data
+- post hoc judge reruns
+
+Start with:
+
+- `clawgraph artifact append`
+- `clawgraph readiness --session latest`
+- `clawgraph export dataset --builder sft`
+
+### Evaluator
+
+You want to rerun judges or attach new scores without mutating history.
+
+Start with:
+
+- `clawgraph artifact append`
+- `clawgraph artifact list --session latest --latest-only`
+- `clawgraph replay --session latest`
+
+### Platform owner
+
+You want a simple answer to:
+
+- are sessions training-ready
+- which branches are inferred versus declared
+- which artifacts are active versus superseded
+
+Start with:
+
+- `clawgraph inspect branch --session latest`
+- `clawgraph artifact list --session latest --json`
+- `clawgraph readiness --session latest`
 
 ## Quickstart
 
@@ -163,9 +232,26 @@ clawgraph replay --session latest
 Export a dataset:
 
 ```bash
-clawgraph export dataset --builder preference \
+clawgraph export dataset --builder sft \
   --session latest \
-  --out ./exports/preference.jsonl
+  --out ./exports/sft.jsonl
+```
+
+Append a semantic runtime event:
+
+```bash
+clawgraph semantic append \
+  --session-id sess_123 \
+  --run-id run_123 \
+  --kind fallback_declared \
+  --fact-ref fact_request_1 \
+  --payload '{"request_fact_id":"fact_request_1","branch_id":"br_fallback_1","branch_type":"fallback"}'
+```
+
+Check training readiness:
+
+```bash
+clawgraph readiness --session latest
 ```
 
 ## Strongest ideas
@@ -207,15 +293,16 @@ clawgraph/
 - [Examples](examples/README.md)
 - [Schemas](schemas/README.md)
 - [Contributing](CONTRIBUTING.md)
-- [OpenClaw Integration](docs/openclaw_integration.md)
-- [Event Protocol](docs/event_protocol.md)
-- [Artifact Protocol](docs/artifact_protocol.md)
-- [Branching Model](docs/branching.md)
-- [Semantic Contract](docs/semantic_contract.md)
-- [Supervision Model](docs/supervision.md)
-- [Dataset Builders](docs/dataset_builders.md)
-- [FAQ](docs/faq.md)
-- [Roadmap](docs/roadmap.md)
+- [Docs Home](docs/index.md)
+- [OpenClaw Integration](docs/guides/openclaw_integration.md)
+- [User Stories](docs/guides/user_stories.md)
+- [Event Protocol](docs/reference/event_protocol.md)
+- [Artifact Protocol](docs/concepts/artifact_protocol.md)
+- [Branching Model](docs/concepts/branching.md)
+- [Semantic Contract](docs/concepts/semantic_contract.md)
+- [Supervision Model](docs/concepts/supervision_model.md)
+- [Dataset Builders](docs/guides/dataset_builders.md)
+- [FAQ](docs/reference/faq.md)
 
 ## Current focus
 

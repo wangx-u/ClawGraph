@@ -27,9 +27,11 @@ tool_endpoint: http://localhost:8080/tools
 
 No core runtime rewrite is required.
 
-## 5. Inspect replay and export
+## 5. Inspect replay, readiness, and export
 
 ```bash
 clawgraph replay --session latest
-clawgraph export dataset --builder preference --session latest --out out.jsonl
+clawgraph inspect session --session latest
+clawgraph readiness --session latest
+clawgraph export dataset --builder sft --session latest --out out.jsonl
 ```

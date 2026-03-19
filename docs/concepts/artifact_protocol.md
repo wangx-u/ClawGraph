@@ -14,3 +14,19 @@ Examples:
 - lineage
 
 Artifacts exist so supervision can evolve without mutating historical facts.
+
+Early artifact workflows include:
+
+- append a score to `session:<id>`
+- attach a critique to `fact:<id>`
+- attach a ranking to `branch:<id>`
+- attach a distillation target to `fact:<id>` or `branch:<id>`
+
+Governance fields in the early implementation:
+
+- `status`: `active` or `superseded`
+- `confidence`
+- `supersedes_artifact_id`
+
+This keeps judge reruns and reward revisions explicit instead of overwriting
+old supervision.

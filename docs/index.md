@@ -21,6 +21,8 @@ features:
     details: ClawGraph is optimized for replay, judgment, ranking, dataset construction, and training reuse.
   - title: Proxy-first adoption
     details: Route runtime traffic through ClawGraph first. Add richer semantics later only when needed.
+  - title: Inspect before you export
+    details: Session, request, branch, artifact, and readiness views make training decisions auditable.
   - title: Branch-aware execution graphs
     details: Retries, fallbacks, repairs, and subagents are first-class rather than hidden in flat logs.
   - title: Typed supervision artifacts
