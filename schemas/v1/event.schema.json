@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawgraph.dev/schemas/v1/event.schema.json",
+  "title": "ClawGraph Fact Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fact_id",
+    "schema_version",
+    "run_id",
+    "session_id",
+    "timestamp",
+    "actor",
+    "kind",
+    "payload"
+  ],
+  "properties": {
+    "fact_id": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "const": "v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "thread_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "parent_ref": { "type": "string" },
+    "branch_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "actor": {
+      "type": "string",
+      "enum": ["user", "model", "tool", "subagent", "runtime", "proxy", "system"]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "request_started",
+        "request_finished",
+        "response_chunk",
+        "response_finished",
+        "tool_call_started",
+        "tool_call_finished",
+        "subagent_call_started",
+        "subagent_call_finished",
+        "error_raised",
+        "final_response_sent"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "metadata": {
+      "type": "object"
+    }
+  }
+}

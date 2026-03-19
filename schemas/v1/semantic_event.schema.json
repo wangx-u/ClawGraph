@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawgraph.dev/schemas/v1/semantic_event.schema.json",
+  "title": "ClawGraph Semantic Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "semantic_event_id",
+    "schema_version",
+    "run_id",
+    "fact_ref",
+    "kind",
+    "payload"
+  ],
+  "properties": {
+    "semantic_event_id": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "const": "v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "fact_ref": { "type": "string", "minLength": 1 },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "plan_created",
+        "subgoal_selected",
+        "controller_route_decided",
+        "retry_declared",
+        "fallback_declared",
+        "branch_open_declared",
+        "branch_close_declared",
+        "stop_reason_declared",
+        "uncertainty_reported"
+      ]
+    },
+    "payload": { "type": "object" },
+    "metadata": { "type": "object" }
+  }
+}

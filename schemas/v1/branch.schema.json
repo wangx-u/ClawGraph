@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawgraph.dev/schemas/v1/branch.schema.json",
+  "title": "ClawGraph Branch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "branch_id",
+    "schema_version",
+    "run_id",
+    "branch_type",
+    "status"
+  ],
+  "properties": {
+    "branch_id": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "const": "v1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "parent_branch_id": { "type": "string" },
+    "opened_at_fact_id": { "type": "string" },
+    "closed_at_fact_id": { "type": "string" },
+    "branch_type": {
+      "type": "string",
+      "enum": ["mainline", "retry", "fallback", "repair", "subagent", "explore"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "closed", "merged", "abandoned", "failed", "succeeded"]
+    },
+    "open_reason": { "type": "string" },
+    "metadata": { "type": "object" }
+  }
+}
