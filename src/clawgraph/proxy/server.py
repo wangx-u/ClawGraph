@@ -93,11 +93,19 @@ def _resolve_upstream_url(upstream: str, path: str) -> str:
 
 
 def _target_upstream(path: str, config: ProxyConfig) -> str | None:
-    if path == "/v1/chat/completions":
+    if path.startswith("/v1/") and path != "/v1/semantic-events":
         return config.model_upstream
     if path.startswith("/tools"):
         return config.tool_upstream
     return None
+
+
+def _actor_for_path(path: str) -> str:
+    if path.startswith("/v1/") and path != "/v1/semantic-events":
+        return "model"
+    if path.startswith("/tools"):
+        return "tool"
+    return "runtime"
 
 
 def _payload_from_response(
@@ -276,7 +284,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
             request_fact = new_fact_event(
                 run_id=run_id,
                 session_id=session_id,
-                actor="model" if self.path == "/v1/chat/completions" else "tool",
+                actor=_actor_for_path(self.path),
                 kind="request_started",
                 payload={
                     "method": "POST",

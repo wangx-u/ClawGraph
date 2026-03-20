@@ -12,6 +12,12 @@ OpenClaw / agent runtime
     -> Async RL / Distill Bridges
 ```
 
+The boundary is deliberate:
+
+- ClawGraph captures and structures runtime execution.
+- ClawGraph does not own model training.
+- Facts stay stable even when builders, judges, and reward logic change.
+
 ## Layer responsibilities
 
 ### Proxy Capture Layer

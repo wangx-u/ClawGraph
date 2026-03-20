@@ -15,7 +15,7 @@ Core branch types in v1:
 Branches can be inferred from proxy traffic or declared by the runtime through
 the semantic contract.
 
-The early inspect surfaces always distinguish:
+Inspect surfaces always distinguish:
 
 - `source=inferred`
 - `source=declared`

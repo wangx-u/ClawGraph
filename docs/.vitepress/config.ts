@@ -5,11 +5,13 @@ export default defineConfig({
   description:
     "Immutable, branch-aware execution graphs for OpenClaw-style agents.",
   themeConfig: {
+    logo: "/clawgraph-logo.png",
     nav: [
-      { text: "Overview", link: "/overview/what_is_clawgraph" },
-      { text: "Concepts", link: "/concepts/execution_facts" },
+      { text: "Start Here", link: "/guides/start_here" },
       { text: "Guides", link: "/guides/quickstart" },
-      { text: "Reference", link: "/reference/event_protocol" }
+      { text: "Examples", link: "/guides/examples" },
+      { text: "Concepts", link: "/concepts/execution_facts" },
+      { text: "Reference", link: "/reference/cli_reference" }
     ],
     sidebar: {
       "/overview/": [
@@ -38,10 +40,19 @@ export default defineConfig({
       ],
       "/guides/": [
         {
-          text: "Guides",
+          text: "Get Started",
           items: [
+            { text: "Start Here", link: "/guides/start_here" },
+            { text: "15-Minute Path", link: "/guides/fifteen_minute_path" },
             { text: "Quickstart", link: "/guides/quickstart" },
+            { text: "Examples", link: "/guides/examples" },
+            { text: "User Stories", link: "/guides/user_stories" },
             { text: "OpenClaw Integration", link: "/guides/openclaw_integration" },
+          ]
+        },
+        {
+          text: "Workflows",
+          items: [
             { text: "Proxy Mode", link: "/guides/proxy_mode" },
             { text: "Semantic Mode", link: "/guides/semantic_mode" },
             { text: "Replay and Debug", link: "/guides/replay_and_debug" },
@@ -50,7 +61,7 @@ export default defineConfig({
             {
               text: "Custom Artifacts and Builders",
               link: "/guides/custom_artifacts_and_builders"
-            }
+            },
           ]
         }
       ],
@@ -72,6 +83,10 @@ export default defineConfig({
     socialLinks: [
       { icon: "github", link: "https://github.com/your-org/clawgraph" }
     ],
+    footer: {
+      message: "Capture once. Reuse everywhere.",
+      copyright: "Copyright 2026 ClawGraph Authors"
+    },
     search: {
       provider: "local"
     }

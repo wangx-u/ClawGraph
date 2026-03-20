@@ -1,221 +1,54 @@
 # ClawGraph
 
+<p align="center">
+  <img src="docs/clawgraph-logo.png" alt="ClawGraph logo" width="160">
+</p>
+
 ### Immutable, branch-aware execution graphs for OpenClaw-style agents
 
-Capture real agent execution with proxy-first adoption and optional semantic
-runtime signals. Replay, judge, rank, and export reusable datasets for async
-RL and distillation from the same source of truth.
+ClawGraph sits between your runtime and your training stack. It captures real
+agent execution once, keeps facts immutable, lets you attach supervision later,
+and exports reusable datasets for SFT, preference learning, binary RL, async RL,
+and distillation.
 
-> Most tracing systems are built for monitoring. ClawGraph is built for
-> learning.
+> Most tracing systems are built for monitoring. ClawGraph is built for learning.
 
-## What is ClawGraph?
+## Why teams use ClawGraph
 
-ClawGraph is a learning-native execution substrate for OpenClaw-style agents.
+- **Proxy-first adoption**: point model and tool traffic at ClawGraph before
+  you change runtime code.
+- **Learning-native observability**: inspect sessions, requests, branches,
+  artifacts, and export readiness from the same captured run.
+- **Branch-aware execution**: retries, fallbacks, repairs, and subagents are
+  first-class instead of hidden in flat logs.
+- **Reusable supervision**: keep facts immutable and attach scores, labels,
+  rankings, and critiques as separate typed artifacts.
+- **Downstream-ready datasets**: export the same run into SFT, preference, and
+  binary RL builders with lineage-aware manifests.
 
-It sits between:
+## In one sentence
 
-- runtime execution
-- evaluation, supervision, dataset building, and training systems
+ClawGraph turns real OpenClaw-style agent runs into reusable learning data
+without forcing you to rewrite the runtime first.
 
-ClawGraph captures immutable execution facts from real agent runs, derives
-branch-aware execution graphs, attaches typed supervision artifacts, and
-exports datasets without requiring the runtime to be rewritten.
+## 5-minute quickstart
 
-## What ClawGraph is not
-
-ClawGraph is not:
-
-- a new agent runtime
-- a trainer
-- a fixed reward system
-- a dashboard-first observability product
-- tied to a single RL, SFT, DPO, or distillation recipe
-
-## Core promise
-
-Capture once. Reuse everywhere.
-
-The same agent run should support:
-
-- replay
-- failure analysis
-- ranking
-- evaluation
-- dataset construction
-- async RL
-- distillation
-
-Current MVP commands:
-
-- `clawgraph proxy`
-- `clawgraph replay`
-- `clawgraph branches`
-- `clawgraph inspect`
-- `clawgraph semantic append`
-- `clawgraph artifact append`
-- `clawgraph artifact list`
-- `clawgraph readiness`
-- `clawgraph export dataset`
-
-## Architecture
-
-```text
-OpenClaw / Claw-style Agent Runtime
-(model, tools, subagents, user I/O)
-                    |
-                    v
-          1. Proxy Capture Layer
-   model proxy · tool proxy · subagent proxy
-                    |
-                    v
-          2. Immutable Fact Log
-     append-only execution facts
-                    |
-        +-----------+------------+
-        |                        |
-        v                        v
-  3a. Semantic Contract    3b. Graph / View Builders
-  (optional runtime         session / episode /
-   semantics)               branch / replay / graph
-        +-----------+------------+
-                    |
-                    v
-             4. Artifact Engine
-      scores · critiques · rankings · targets
-                    |
-                    v
-             5. Dataset Builders
-      SFT · preference · binary RL · OPD · RM
-                    |
-                    v
-         6. Async RL / Distill Bridges
-```
-
-## Design principles
-
-1. Facts are immutable.
-2. Graphs are derived.
-3. Artifacts are external.
-4. Branching is first-class.
-5. Proxy-first, semantics-later.
-6. Supervision is typed.
-7. Training is downstream.
-8. Every export is reproducible.
-
-## Why this exists
-
-Most agent teams still face the same problems:
-
-- execution history lives in logs, not reusable structured facts
-- retries, fallbacks, repairs, and subagents are hard to reconstruct
-- replay, evaluation, and dataset generation are separate ad hoc pipelines
-- learning logic changes quickly, but historical traces are not reusable
-- agent teams want learning from real runs without rewriting the runtime
-
-ClawGraph fixes this with a simple rule:
-
-1. capture execution facts once
-2. never mutate those facts
-3. derive graphs and replay views from them
-4. attach supervision externally
-5. export datasets through versioned builders
-
-## Adoption model
-
-ClawGraph intentionally separates adoption from semantic fidelity.
-
-### Proxy-first
-
-Start by routing model and tool traffic through the proxy.
-
-This gives you:
-
-- immediate capture
-- minimal runtime changes
-- replay readiness
-- export readiness
-- streaming passthrough for chat-completions
-
-### Semantics later
-
-When you need richer learning fidelity, add semantic events such as:
-
-- plan created
-- subgoal selected
-- retry declared
-- fallback declared
-- controller route decided
-- stop reason
-
-Proxy solves adoption. Semantic contract solves semantic fidelity.
-
-## Core user stories
-
-### Runtime engineer
-
-You own an OpenClaw-style runtime and want to answer:
-
-- which request retried
-- which fallback path won
-- whether the failure was upstream, tool, or routing related
-- which session is slow enough to debug
-
-Start with:
-
-- `clawgraph proxy`
-- `clawgraph inspect session --session latest`
-- `clawgraph inspect request --request-id <id>`
-
-### RL engineer
-
-You want to reuse the same captured run for:
-
-- SFT warm starts
-- binary RL samples
-- preference data
-- post hoc judge reruns
-
-Start with:
-
-- `clawgraph artifact append`
-- `clawgraph readiness --session latest`
-- `clawgraph export dataset --builder sft`
-
-### Evaluator
-
-You want to rerun judges or attach new scores without mutating history.
-
-Start with:
-
-- `clawgraph artifact append`
-- `clawgraph artifact list --session latest --latest-only`
-- `clawgraph replay --session latest`
-
-### Platform owner
-
-You want a simple answer to:
-
-- are sessions training-ready
-- which branches are inferred versus declared
-- which artifacts are active versus superseded
-
-Start with:
-
-- `clawgraph inspect branch --session latest`
-- `clawgraph artifact list --session latest --json`
-- `clawgraph readiness --session latest`
-
-## Quickstart
+Install and inspect a complete seeded session locally:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
-clawgraph --help
+
+clawgraph bootstrap openclaw --store sqlite:///clawgraph.db
+clawgraph list sessions
+clawgraph inspect session --session latest
+clawgraph replay --session latest
+clawgraph readiness --session latest --builder preference
+clawgraph export dataset --builder preference --session latest --dry-run
 ```
 
-Start the proxy:
+When you are ready to connect a real runtime:
 
 ```bash
 clawgraph proxy --model-upstream https://your-model-endpoint \
@@ -223,54 +56,132 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
   --store sqlite:///clawgraph.db
 ```
 
-Inspect replay:
+## Choose your path
 
-```bash
-clawgraph replay --session latest
+| If you want to... | Start here |
+| --- | --- |
+| Follow one guided path from first run to export | [`docs/guides/fifteen_minute_path.md`](docs/guides/fifteen_minute_path.md) |
+| See ClawGraph working end to end in one session | [`docs/guides/quickstart.md`](docs/guides/quickstart.md) |
+| Connect an existing OpenClaw-style runtime | [`docs/guides/openclaw_integration.md`](docs/guides/openclaw_integration.md) |
+| Understand which command to run next for your role | [`docs/guides/user_stories.md`](docs/guides/user_stories.md) |
+| Inspect failures before exporting training data | [`docs/guides/replay_and_debug.md`](docs/guides/replay_and_debug.md) |
+| Generate datasets for training | [`docs/guides/dataset_builders.md`](docs/guides/dataset_builders.md) |
+| Go from exported datasets into async RL | [`docs/guides/export_to_async_rl.md`](docs/guides/export_to_async_rl.md) |
+
+## What you can do today
+
+### 1. Capture real traffic
+
+- Run `clawgraph proxy`
+- Route model and tool traffic through ClawGraph
+- Add stable ids later with `x-clawgraph-session-id`, `x-clawgraph-run-id`,
+  `x-clawgraph-request-id`, and `x-clawgraph-user-id`
+
+### 2. Inspect before you train
+
+- `clawgraph list sessions`
+- `clawgraph list requests --session latest`
+- `clawgraph inspect session --session latest`
+- `clawgraph inspect request --session latest --request-id latest`
+- `clawgraph inspect branch --session latest`
+- `clawgraph replay --session latest`
+
+### 3. Attach supervision without mutating facts
+
+- `clawgraph artifact bootstrap --template openclaw-defaults --session latest`
+- `clawgraph artifact list --session latest --latest-only`
+- `clawgraph semantic append ...` for retry, fallback, and routing signals
+
+### 4. Export training-ready datasets
+
+- `clawgraph readiness --session latest --builder sft`
+- `clawgraph readiness --session latest --builder preference`
+- `clawgraph readiness --session latest --builder binary_rl`
+- `clawgraph export dataset --builder sft --session latest --out exports/sft.jsonl`
+- `clawgraph export dataset --builder preference --session latest --out exports/preference.jsonl`
+- `clawgraph export dataset --builder binary_rl --session latest --out exports/binary_rl.jsonl`
+
+Each export also writes a manifest:
+
+- `*.jsonl.manifest.json`
+
+## How ClawGraph fits into the stack
+
+```text
+OpenClaw / Claw-style Agent Runtime
+(model, tools, subagents, user I/O)
+                    |
+                    v
+              ClawGraph Proxy
+                    |
+                    v
+           Immutable Fact Log
+                    |
+        +-----------+------------+
+        |                        |
+        v                        v
+  Semantic Contract        Graph / View Builders
+        +-----------+------------+
+                    |
+                    v
+              Artifact Engine
+                    |
+                    v
+              Dataset Builders
+                    |
+                    v
+         Async RL / Distill Bridges
 ```
 
-Export a dataset:
+The design rule is simple:
 
-```bash
-clawgraph export dataset --builder sft \
-  --session latest \
-  --out ./exports/sft.jsonl
-```
+1. capture execution facts once
+2. never mutate those facts
+3. derive replay and branch views from them
+4. attach supervision externally
+5. export datasets through reproducible builders
 
-Append a semantic runtime event:
+## What ClawGraph is
 
-```bash
-clawgraph semantic append \
-  --session-id sess_123 \
-  --run-id run_123 \
-  --kind fallback_declared \
-  --fact-ref fact_request_1 \
-  --payload '{"request_fact_id":"fact_request_1","branch_id":"br_fallback_1","branch_type":"fallback"}'
-```
+- a learning-native execution substrate
+- a proxy-first capture layer for OpenClaw-style runtimes
+- a branch-aware replay and inspection system
+- a typed artifact layer for post hoc supervision
+- a reproducible dataset export layer
 
-Check training readiness:
+## What ClawGraph is not
 
-```bash
-clawgraph readiness --session latest
-```
+- a new agent runtime
+- a trainer
+- a fixed reward system
+- a dashboard-first observability product
+- tied to a single RL, SFT, DPO, or distillation recipe
 
-## Strongest ideas
+## Commands you will use most
 
-### 1. Immutable execution facts
+- `clawgraph bootstrap`
+- `clawgraph proxy`
+- `clawgraph list`
+- `clawgraph replay`
+- `clawgraph inspect`
+- `clawgraph semantic append`
+- `clawgraph artifact bootstrap`
+- `clawgraph artifact append`
+- `clawgraph artifact list`
+- `clawgraph readiness`
+- `clawgraph export dataset`
 
-Facts remain reusable even when prompts, judges, ranking logic, reward
-formulas, and builders evolve.
+## Documentation
 
-### 2. Branch-aware execution graphs
-
-Agent learning needs more than a flat message list. ClawGraph models retries,
-fallbacks, repairs, subagents, and sibling branch comparisons directly.
-
-### 3. Typed supervision artifacts
-
-ClawGraph models supervision as versioned external artifacts rather than a
-single reward scalar. The same run can power SFT, preference learning, binary
-RL, OPD, process reward modeling, and offline evaluation.
+- Start here: [`docs/guides/start_here.md`](docs/guides/start_here.md)
+- 15-minute path: [`docs/guides/fifteen_minute_path.md`](docs/guides/fifteen_minute_path.md)
+- Quickstart: [`docs/guides/quickstart.md`](docs/guides/quickstart.md)
+- OpenClaw integration: [`docs/guides/openclaw_integration.md`](docs/guides/openclaw_integration.md)
+- User stories: [`docs/guides/user_stories.md`](docs/guides/user_stories.md)
+- Dataset builders: [`docs/guides/dataset_builders.md`](docs/guides/dataset_builders.md)
+- CLI reference: [`docs/reference/cli_reference.md`](docs/reference/cli_reference.md)
+- Examples: [`examples/README.md`](examples/README.md)
+- Docs home: [`docs/index.md`](docs/index.md)
 
 ## Repository layout
 
@@ -286,31 +197,23 @@ clawgraph/
 └── rfc/
 ```
 
-## Start here
-
-- [Roadmap](ROADMAP.md)
-- [MVP issues](MVP_ISSUES.md)
-- [Examples](examples/README.md)
-- [Schemas](schemas/README.md)
-- [Contributing](CONTRIBUTING.md)
-- [Docs Home](docs/index.md)
-- [OpenClaw Integration](docs/guides/openclaw_integration.md)
-- [User Stories](docs/guides/user_stories.md)
-- [Event Protocol](docs/reference/event_protocol.md)
-- [Artifact Protocol](docs/concepts/artifact_protocol.md)
-- [Branching Model](docs/concepts/branching.md)
-- [Semantic Contract](docs/concepts/semantic_contract.md)
-- [Supervision Model](docs/concepts/supervision_model.md)
-- [Dataset Builders](docs/guides/dataset_builders.md)
-- [FAQ](docs/reference/faq.md)
-
 ## Current focus
 
-The initial ClawGraph release focuses on:
+The current ClawGraph release focuses on:
 
 - proxy-first capture
 - immutable fact protocol
-- session / episode / branch / replay views
+- session, request, branch, and replay views
 - typed artifact protocol
-- sample builders
-- export bridges to downstream systems
+- reusable dataset builders
+- export bridges to downstream training systems
+
+## More entry points
+
+- Roadmap: [`ROADMAP.md`](ROADMAP.md)
+- Backlog: [`BACKLOG.md`](BACKLOG.md)
+- Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Event protocol: [`docs/reference/event_protocol.md`](docs/reference/event_protocol.md)
+- Branching model: [`docs/concepts/branching.md`](docs/concepts/branching.md)
+- Artifact protocol: [`docs/concepts/artifact_protocol.md`](docs/concepts/artifact_protocol.md)
+- Semantic contract: [`docs/concepts/semantic_contract.md`](docs/concepts/semantic_contract.md)

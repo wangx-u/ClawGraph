@@ -12,4 +12,4 @@ See the repository roadmap for the complete plan:
 
 Repository file:
 
-- [`ROADMAP.md`](../../ROADMAP.md)
+- `ROADMAP.md`

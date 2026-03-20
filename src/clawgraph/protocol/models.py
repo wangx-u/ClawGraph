@@ -1,4 +1,4 @@
-"""Core protocol models for the early ClawGraph scaffolding."""
+"""Core protocol models for ClawGraph."""
 
 from __future__ import annotations
 

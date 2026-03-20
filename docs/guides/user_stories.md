@@ -16,10 +16,11 @@ Questions you need answered:
 
 Typical workflow:
 
-1. Route model and tool traffic through `clawgraph proxy`.
-2. Add `x-clawgraph-session-id`, `x-clawgraph-request-id`, and `x-clawgraph-user-id`.
-3. Use `clawgraph inspect session --session latest`.
-4. Drill into one request with `clawgraph inspect request --request-id <id>`.
+1. Start with `clawgraph bootstrap openclaw` if you need a first-run baseline.
+2. Route model and tool traffic through `clawgraph proxy` for real runtime capture.
+3. Add `x-clawgraph-session-id`, `x-clawgraph-run-id`, `x-clawgraph-request-id`, and `x-clawgraph-user-id`.
+4. Use `clawgraph list requests --session latest` or `--run-id <run>`.
+5. Drill into one request with `clawgraph inspect request --session latest --request-id latest`.
 
 ## 2. RL engineer
 
@@ -32,10 +33,12 @@ You want the same real run to support:
 
 Typical workflow:
 
-1. Capture runs once through the proxy.
-2. Attach supervision with `clawgraph artifact append`.
-3. Check `clawgraph readiness --session latest`.
-4. Export only when the session is ready for the target builder.
+1. Bootstrap or capture runs once.
+2. Discover sessions and requests with `clawgraph list`.
+3. Start with `clawgraph artifact bootstrap --template openclaw-defaults --session latest --dry-run`.
+4. Persist the template when the preview looks right.
+5. Check `clawgraph readiness --session latest --builder preference` or scope to `--run-id`.
+6. Use `clawgraph export dataset --builder preference --session latest --dry-run` before writing files.
 
 ## 3. Evaluator
 
@@ -44,9 +47,11 @@ You want to re-score old trajectories without mutating their source facts.
 Typical workflow:
 
 1. Replay the session with `clawgraph replay --session <id>`.
-2. Append new scores or rankings as artifacts.
-3. List active artifacts with `clawgraph artifact list --latest-only`.
-4. Compare derived readiness before exporting.
+2. Resolve a target with `latest-response`, `latest-failed-branch`, or `session:latest`.
+3. Use `clawgraph artifact bootstrap --template request-outcome-scores --session <id>` for a first pass.
+4. Append new scores or rankings as artifacts only where the built-in template is not enough.
+5. List active artifacts with `clawgraph artifact list --latest-only --session <id>`.
+6. Compare derived readiness before exporting.
 
 ## 4. Platform owner
 
@@ -58,7 +63,8 @@ You need a simple control-plane style answer:
 
 Typical workflow:
 
-1. Inspect session summaries regularly.
-2. Prefer declared semantic branches where fidelity matters.
-3. Keep artifact status explicit: `active` versus `superseded`.
-4. Use readiness output as the gate before builder export.
+1. Seed or capture sessions regularly.
+2. Inspect session summaries and branch sources.
+3. Prefer declared semantic branches where fidelity matters.
+4. Keep artifact status explicit: `active` versus `superseded`.
+5. Use `readiness --builder ...` plus `export dataset --dry-run`, scoped by session or run, as the gate before writing files.

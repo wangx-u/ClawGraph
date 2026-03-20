@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -46,7 +47,7 @@ class SQLiteFactStore:
         return connection
 
     def _init_db(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS facts (
@@ -115,6 +116,7 @@ class SQLiteFactStore:
                 ON artifacts(artifact_type, producer, status, created_at, seq)
                 """
             )
+            connection.commit()
 
     @staticmethod
     def _ensure_column(
@@ -134,7 +136,7 @@ class SQLiteFactStore:
     def append_fact(self, fact: FactEvent) -> None:
         """Persist a fact event."""
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
                 """
                 INSERT INTO facts (
@@ -162,17 +164,20 @@ class SQLiteFactStore:
                     json.dumps(fact.metadata, ensure_ascii=True, sort_keys=True),
                 ),
             )
+            connection.commit()
 
     def list_facts(
         self,
         session_id: str | None = None,
         *,
         request_id: str | None = None,
+        run_id: str | None = None,
+        task_id: str | None = None,
     ) -> list[FactEvent]:
         """Return facts filtered by session or request id ordered by insertion."""
 
-        if session_id is None and request_id is None:
-            raise ValueError("session_id or request_id is required")
+        if session_id is None and request_id is None and run_id is None and task_id is None:
+            raise ValueError("session_id, request_id, run_id, or task_id is required")
 
         clauses: list[str] = []
         values: list[str] = []
@@ -182,7 +187,13 @@ class SQLiteFactStore:
         if request_id is not None:
             clauses.append("request_id = ?")
             values.append(request_id)
-        with self._connect() as connection:
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            values.append(run_id)
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            values.append(task_id)
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 (
                     "SELECT * FROM facts WHERE "
@@ -194,21 +205,31 @@ class SQLiteFactStore:
 
         return [self._row_to_fact(row) for row in rows]
 
-    def get_latest_request_id(self, session_id: str | None = None) -> str | None:
+    def get_latest_request_id(
+        self,
+        session_id: str | None = None,
+        *,
+        run_id: str | None = None,
+        task_id: str | None = None,
+    ) -> str | None:
         """Return the most recently seen request id."""
 
         query = "SELECT request_id FROM facts"
         values: list[str] = []
+        clauses: list[str] = ["request_id IS NOT NULL"]
         if session_id is not None:
-            query += " WHERE session_id = ?"
+            clauses.append("session_id = ?")
             values.append(session_id)
-        query += (
-            " AND request_id IS NOT NULL ORDER BY timestamp DESC, seq DESC LIMIT 1"
-            if session_id is not None
-            else " WHERE request_id IS NOT NULL ORDER BY timestamp DESC, seq DESC LIMIT 1"
-        )
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            values.append(run_id)
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            values.append(task_id)
+        query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY timestamp DESC, seq DESC LIMIT 1"
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(query, values).fetchone()
         if row is None:
             return None
@@ -218,7 +239,7 @@ class SQLiteFactStore:
         """Persist an external supervision artifact."""
 
         created_at = artifact.created_at or datetime.now().astimezone()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
                 """
                 INSERT INTO artifacts (
@@ -244,11 +265,13 @@ class SQLiteFactStore:
                     json.dumps(artifact.metadata, ensure_ascii=True, sort_keys=True),
                 ),
             )
+            connection.commit()
 
     def list_artifacts(
         self,
         *,
         session_id: str | None = None,
+        run_id: str | None = None,
         target_ref: str | None = None,
         artifact_type: str | None = None,
         producer: str | None = None,
@@ -264,6 +287,9 @@ class SQLiteFactStore:
         if session_id is not None:
             clauses.append("session_id = ?")
             values.append(session_id)
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            values.append(run_id)
         if target_ref is not None:
             clauses.append("target_ref = ?")
             values.append(target_ref)
@@ -283,22 +309,29 @@ class SQLiteFactStore:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY created_at ASC, seq ASC"
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(query, values).fetchall()
 
         artifacts = [self._row_to_artifact(row) for row in rows]
         if latest_only:
-            latest: dict[tuple[str, str, str], ArtifactRecord] = {}
-            for artifact in artifacts:
-                key = (artifact.artifact_type, artifact.target_ref, artifact.producer)
-                latest[key] = artifact
-            return list(latest.values())
+            superseded_ids = {
+                artifact.supersedes_artifact_id
+                for artifact in artifacts
+                if artifact.supersedes_artifact_id is not None
+            }
+            filtered = [
+                artifact
+                for artifact in artifacts
+                if artifact.artifact_id not in superseded_ids
+                and (status is not None or artifact.status != "superseded")
+            ]
+            return filtered
         return artifacts
 
     def get_latest_session_id(self) -> str | None:
         """Return the most recently seen session id."""
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 """
                 SELECT session_id
@@ -314,12 +347,13 @@ class SQLiteFactStore:
     def iter_sessions(self) -> Iterable[str]:
         """Iterate known session ids in recency order."""
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT DISTINCT session_id
+                SELECT session_id, MAX(timestamp) AS latest_timestamp
                 FROM facts
-                ORDER BY session_id
+                GROUP BY session_id
+                ORDER BY latest_timestamp DESC
                 """
             ).fetchall()
 

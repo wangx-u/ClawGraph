@@ -10,12 +10,14 @@ from urllib.request import Request, urlopen
 
 from clawgraph.proxy.server import (
     ProxyConfig,
+    _actor_for_path,
     _build_handler,
     _extract_sse_fragments,
     _is_streaming_content_type,
     _is_streaming_request,
     _payload_from_response,
     _resolve_upstream_url,
+    _target_upstream,
 )
 from clawgraph.store import SQLiteFactStore
 
@@ -51,6 +53,19 @@ class ProxyCaptureTest(unittest.TestCase):
     def test_helper_functions(self) -> None:
         url = _resolve_upstream_url("https://example.com", "/v1/chat/completions")
         self.assertEqual(url, "https://example.com/v1/chat/completions")
+        config = ProxyConfig(
+            host="127.0.0.1",
+            port=8080,
+            store_uri="sqlite:///ignored.db",
+            model_upstream="https://model.example",
+            tool_upstream="https://tool.example",
+        )
+        self.assertEqual(_target_upstream("/v1/chat/completions", config), "https://model.example")
+        self.assertEqual(_target_upstream("/v1/responses", config), "https://model.example")
+        self.assertEqual(_target_upstream("/v1/semantic-events", config), None)
+        self.assertEqual(_actor_for_path("/v1/chat/completions"), "model")
+        self.assertEqual(_actor_for_path("/v1/responses"), "model")
+        self.assertEqual(_actor_for_path("/tools/run"), "tool")
 
         payload = _payload_from_response(
             path="/v1/chat/completions",

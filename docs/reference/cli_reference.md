@@ -13,11 +13,11 @@ Captures:
 
 ## `clawgraph replay`
 
-Inspect a session replay.
+Inspect a replay for one session or one run.
 
 ## `clawgraph branches`
 
-Inspect branches for a session.
+Inspect branches for a session or run scope.
 
 Shows:
 
@@ -25,6 +25,24 @@ Shows:
 - branch status
 - parent branch
 - request counts
+
+## `clawgraph list sessions`
+
+List known sessions in recency order.
+
+## `clawgraph list requests`
+
+List request spans for one session or one run.
+
+## `clawgraph list facts`
+
+List facts for one session or run with optional `--kind` or `--actor` filters.
+
+## `clawgraph bootstrap openclaw`
+
+Seed a first-run OpenClaw-style session into the store.
+
+If `--session-id` is omitted, ClawGraph generates a unique seed session id.
 
 ## `clawgraph inspect session`
 
@@ -34,6 +52,11 @@ Inspect a learning-oriented session summary.
 
 Inspect one request span with timing and identity fields.
 
+Useful flags:
+
+- `--session`
+- `--run-id`
+
 ## `clawgraph inspect branch`
 
 Inspect one branch or list branch summaries.
@@ -42,13 +65,47 @@ Inspect one branch or list branch summaries.
 
 Append a semantic runtime event.
 
+`--payload` accepts either inline JSON or `@path/to/file.json`.
+
 ## `clawgraph artifact append`
 
 Append a typed external artifact with status, confidence, and supersession.
 
+`--payload` accepts either inline JSON or `@path/to/file.json`.
+
+Target shortcuts:
+
+- `latest-response`
+- `latest-failed-branch`
+- `latest-succeeded-branch`
+- `session:latest`
+
+## `clawgraph artifact bootstrap`
+
+Derive artifacts from built-in supervision templates.
+
+Current templates:
+
+- `request-outcome-scores`
+- `branch-outcome-preference`
+- `openclaw-defaults`
+
+Useful flags:
+
+- `--dry-run`
+- `--json`
+- `--producer`
+- `--version`
+- `--run-id`
+
+Repeated runs skip exact duplicate active artifacts for the same template output.
+
 ## `clawgraph artifact list`
 
 List artifacts for a session or target with governance filters.
+
+`--latest-only` keeps active, non-superseded artifacts while preserving
+multiple distinct supervision records on the same session or branch.
 
 Filters:
 
@@ -57,6 +114,7 @@ Filters:
 - `--version`
 - `--status`
 - `--latest-only`
+- `--run-id`
 
 ## `clawgraph readiness`
 
@@ -66,10 +124,31 @@ Inspect whether a session is ready for:
 - preference learning
 - binary RL
 
+Useful flags:
+
+- `--builder`
+- `--json`
+- `--run-id`
+
 ## `clawgraph export dataset`
 
 Export a dataset with a selected builder.
 
-Current CLI scaffold:
+Current built-in builders:
 
-- [`src/clawgraph/cli/main.py`](../../src/clawgraph/cli/main.py)
+- `facts`
+- `sft`
+- `preference`
+- `binary_rl`
+
+Every export also writes a manifest next to the JSONL output.
+
+Useful flags:
+
+- `--dry-run`
+- `--json`
+- `--run-id`
+
+Current CLI surface:
+
+- `src/clawgraph/cli/main.py`

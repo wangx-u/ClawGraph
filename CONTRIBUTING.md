@@ -43,5 +43,5 @@ Open an RFC for:
 
 - Python 3.11+
 - type hints for public interfaces
-- standard library first for early scaffolding
+- standard library first where it keeps operational dependencies minimal
 - comments only where the design is non-obvious

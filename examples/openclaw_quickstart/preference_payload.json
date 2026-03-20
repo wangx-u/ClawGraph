@@ -1,0 +1,5 @@
+{
+  "chosen": "br_retry_declared_1",
+  "rejected": "br_main",
+  "reason": "Retry branch succeeded while the main branch failed."
+}

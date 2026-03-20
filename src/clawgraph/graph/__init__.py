@@ -1,5 +1,6 @@
 """Derived graph and replay views."""
 
+from clawgraph.graph.branch_pairs import ComparableBranchPair, build_comparable_branch_pairs
 from clawgraph.graph.correlation import (
     CorrelatedRequestGroup,
     correlate_request_groups,
@@ -22,10 +23,12 @@ from clawgraph.graph.replay import render_session_replay
 
 __all__ = [
     "BranchInspectSummary",
+    "ComparableBranchPair",
     "CorrelatedRequestGroup",
     "RequestSpanSummary",
     "SessionInspectSummary",
     "build_branch_inspect_summaries",
+    "build_comparable_branch_pairs",
     "build_request_span_summaries",
     "build_session_inspect_summary",
     "correlate_request_groups",

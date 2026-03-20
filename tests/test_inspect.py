@@ -131,7 +131,10 @@ class InspectViewsTest(unittest.TestCase):
                 session_id="session_1",
                 actor="model",
                 kind="request_started",
-                payload={"path": "/v1/chat/completions", "json": {"messages": []}},
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {"messages": [{"role": "user", "content": "hi"}]},
+                },
                 request_id="req_1",
             )
             response = new_fact_event(
@@ -194,9 +197,42 @@ class InspectViewsTest(unittest.TestCase):
                 store.list_facts("session_1"),
                 store.list_artifacts(session_id="session_1", latest_only=True),
             )
-            self.assertTrue(readiness.sft_ready)
-            self.assertTrue(readiness.preference_ready)
-            self.assertTrue(readiness.binary_rl_ready)
+            builders = {builder.builder: builder for builder in readiness.builders}
+            self.assertTrue(builders["sft"].ready)
+            self.assertTrue(builders["binary_rl"].ready)
+            self.assertFalse(builders["preference"].ready)
+            self.assertIn(
+                "active preference artifacts did not resolve to known branches",
+                builders["preference"].blockers,
+            )
+
+    def test_latest_only_keeps_multiple_active_preference_pairs(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+
+            first = new_artifact_record(
+                artifact_type="preference",
+                target_ref="session:session_1",
+                producer="judge-v1",
+                payload={"chosen": "br_retry_1", "rejected": "br_main"},
+                session_id="session_1",
+                run_id="run_1",
+            )
+            second = new_artifact_record(
+                artifact_type="preference",
+                target_ref="session:session_1",
+                producer="judge-v1",
+                payload={"chosen": "br_fallback_1", "rejected": "br_main"},
+                session_id="session_1",
+                run_id="run_1",
+            )
+
+            store.append_artifact(first)
+            store.append_artifact(second)
+
+            artifacts = store.list_artifacts(session_id="session_1", latest_only=True)
+            self.assertEqual(len(artifacts), 2)
 
 
 if __name__ == "__main__":

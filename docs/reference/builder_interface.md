@@ -13,6 +13,6 @@ build(
 )
 ```
 
-Builder scaffolding in code:
+Reference implementation:
 
-- [`src/clawgraph/builders/interfaces.py`](../../src/clawgraph/builders/interfaces.py)
+- `src/clawgraph/builders/interfaces.py`
