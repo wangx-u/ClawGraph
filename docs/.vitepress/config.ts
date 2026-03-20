@@ -9,6 +9,7 @@ export default defineConfig({
     nav: [
       { text: "Start Here", link: "/guides/start_here" },
       { text: "Guides", link: "/guides/quickstart" },
+      { text: "中文", link: "/zh-CN/README" },
       { text: "Examples", link: "/guides/examples" },
       { text: "Concepts", link: "/concepts/execution_facts" },
       { text: "Reference", link: "/reference/cli_reference" }
@@ -62,6 +63,18 @@ export default defineConfig({
               text: "Custom Artifacts and Builders",
               link: "/guides/custom_artifacts_and_builders"
             },
+          ]
+        }
+      ],
+      "/zh-CN/": [
+        {
+          text: "中文入口",
+          items: [
+            { text: "中文文档", link: "/zh-CN/README" },
+            { text: "Start Here", link: "/zh-CN/start_here" },
+            { text: "15 分钟路径", link: "/zh-CN/fifteen_minute_path" },
+            { text: "接入说明", link: "/zh-CN/openclaw_integration" },
+            { text: "数据导出", link: "/zh-CN/dataset_builders" }
           ]
         }
       ],

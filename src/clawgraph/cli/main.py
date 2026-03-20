@@ -70,7 +70,13 @@ def _resolve_target_ref(
             raise ValueError("no sessions found in store")
         return f"session:{session_id}", session_id
 
-    if target_ref in {"latest-response", "latest-failed-branch", "latest-succeeded-branch"}:
+    if target_ref in {
+        "latest-response",
+        "latest-model-response",
+        "latest-tool-response",
+        "latest-failed-branch",
+        "latest-succeeded-branch",
+    }:
         session_id = _resolve_scope_session_id(
             store=store,
             session_value=session_value,
@@ -79,10 +85,19 @@ def _resolve_target_ref(
         facts = store.list_facts(session_id=session_id, run_id=run_value)
         if not facts:
             raise ValueError("no facts found in scope")
-        if target_ref == "latest-response":
+        if target_ref in {"latest-response", "latest-model-response", "latest-tool-response"}:
+            preferred_actor = (
+                "model"
+                if target_ref in {"latest-response", "latest-model-response"}
+                else "tool"
+            )
             for fact in reversed(facts):
-                if fact.kind == "response_finished":
+                if fact.kind == "response_finished" and fact.actor == preferred_actor:
                     return f"fact:{fact.fact_id}", facts[0].session_id
+            if target_ref == "latest-response":
+                for fact in reversed(facts):
+                    if fact.kind == "response_finished":
+                        return f"fact:{fact.fact_id}", facts[0].session_id
             raise ValueError("no response_finished facts found")
 
         branches = build_branch_inspect_summaries(facts)

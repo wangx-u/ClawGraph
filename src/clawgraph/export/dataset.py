@@ -200,12 +200,11 @@ def _build_sft(facts: list[FactEvent]) -> list[dict[str, Any]]:
 
         request = requests_by_id[parent_ref]
         request_json = request.payload.get("json")
-        response_json = fact.payload.get("json")
-        if not isinstance(request_json, dict) or not isinstance(response_json, dict):
+        if not isinstance(request_json, dict):
             continue
 
         messages = _extract_prompt_messages(request_json)
-        message = _extract_assistant_message(response_json)
+        message = _extract_assistant_message(fact.payload)
         if messages is None or message is None:
             continue
 
@@ -494,7 +493,7 @@ def _build_manifest(
     }
 
 
-def _extract_prompt_messages(request_json: dict[str, Any]) -> list[dict[str, str]] | None:
+def _extract_prompt_messages(request_json: dict[str, Any]) -> list[dict[str, Any]] | None:
     messages = request_json.get("messages")
     if isinstance(messages, list):
         normalized = _normalize_messages(messages)
@@ -512,20 +511,26 @@ def _extract_prompt_messages(request_json: dict[str, Any]) -> list[dict[str, str
     return None
 
 
-def _extract_assistant_message(response_json: dict[str, Any]) -> dict[str, str] | None:
+def _extract_assistant_message(response_payload: dict[str, Any]) -> dict[str, Any] | None:
+    canonical = response_payload.get("canonical")
+    if isinstance(canonical, dict):
+        canonical_message = _normalize_assistant_message(canonical.get("assistant_message"))
+        if canonical_message is not None:
+            return canonical_message
+
+    response_json = response_payload.get("json")
+    if not isinstance(response_json, dict):
+        return None
+
     choices = response_json.get("choices")
     if isinstance(choices, list) and choices:
         first_choice = choices[0]
         if isinstance(first_choice, dict):
             message = first_choice.get("message")
             if isinstance(message, dict):
-                content = _normalize_content(message.get("content"))
-                if content is not None:
-                    role = message.get("role")
-                    return {
-                        "role": role if isinstance(role, str) and role else "assistant",
-                        "content": content,
-                    }
+                normalized = _normalize_assistant_message(message)
+                if normalized is not None:
+                    return normalized
 
     output_text = response_json.get("output_text")
     if isinstance(output_text, str) and output_text:
@@ -539,24 +544,14 @@ def _extract_assistant_message(response_json: dict[str, Any]) -> dict[str, str] 
 
     output_items = response_json.get("output")
     if isinstance(output_items, list):
-        for item in output_items:
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") not in {None, "message"}:
-                continue
-            content = _normalize_content(item.get("content"))
-            if content is None:
-                continue
-            role = item.get("role")
-            return {
-                "role": role if isinstance(role, str) and role else "assistant",
-                "content": content,
-            }
+        normalized = _normalize_responses_assistant_message(output_items)
+        if normalized is not None:
+            return normalized
     return None
 
 
-def _normalize_messages(items: list[Any]) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+def _normalize_messages(items: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -567,6 +562,88 @@ def _normalize_messages(items: list[Any]) -> list[dict[str, str]]:
         if content is None:
             continue
         normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def _normalize_assistant_message(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    role = value.get("role")
+    normalized_role = role if isinstance(role, str) and role else "assistant"
+    content = _normalize_content(value.get("content"))
+    tool_calls = _normalize_tool_calls(value.get("tool_calls"))
+    if content is None and not tool_calls:
+        return None
+    message: dict[str, Any] = {"role": normalized_role}
+    if content is not None:
+        message["content"] = content
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return message
+
+
+def _normalize_responses_assistant_message(output_items: list[Any]) -> dict[str, Any] | None:
+    content = None
+    tool_calls: list[dict[str, Any]] = []
+    for item in output_items:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in {None, "message"} and content is None:
+            text = _normalize_content(item.get("content"))
+            if text is not None:
+                content = text
+        elif item_type == "function_call":
+            tool_calls.append(
+                {
+                    "id": _string_value(item.get("id")),
+                    "type": "function",
+                    "function": {
+                        "name": _string_value(item.get("name")) or "",
+                        "arguments": _normalize_content(item.get("arguments")) or "",
+                    },
+                    **(
+                        {"call_id": _string_value(item.get("call_id"))}
+                        if _string_value(item.get("call_id")) is not None
+                        else {}
+                    ),
+                }
+            )
+    if content is None and not tool_calls:
+        return None
+    message: dict[str, Any] = {"role": "assistant"}
+    if content is not None:
+        message["content"] = content
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return message
+
+
+def _normalize_tool_calls(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        if not isinstance(function, dict):
+            continue
+        normalized.append(
+            {
+                "id": _string_value(item.get("id")),
+                "type": _string_value(item.get("type")) or "function",
+                "function": {
+                    "name": _string_value(function.get("name")) or "",
+                    "arguments": _normalize_content(function.get("arguments")) or "",
+                },
+                **(
+                    {"call_id": _string_value(item.get("call_id"))}
+                    if _string_value(item.get("call_id")) is not None
+                    else {}
+                ),
+            }
+        )
     return normalized
 
 

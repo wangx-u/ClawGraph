@@ -16,8 +16,8 @@ hero:
       text: Quickstart
       link: /guides/quickstart
     - theme: alt
-      text: Read Architecture
-      link: /overview/architecture
+      text: 中文文档
+      link: /zh-CN/README
 
 features:
   - title: Built for learning, not dashboards
@@ -56,6 +56,7 @@ Start with the shortest useful path:
    success path.
 3. Read [`OpenClaw Integration`](/guides/openclaw_integration) before wiring a
    real runtime.
+4. Prefer Chinese docs? Start with [`中文文档`](/zh-CN/README).
 
 ## Choose your path
 

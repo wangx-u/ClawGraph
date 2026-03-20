@@ -123,6 +123,176 @@ class ExportDatasetTest(unittest.TestCase):
             self.assertEqual(record["messages"][0]["content"], "hi")
             self.assertEqual(record["messages"][-1]["content"], "hello")
 
+    def test_export_sft_builder_from_stream_summary_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "stream_sft.jsonl"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "status_code": 200,
+                    "streamed": True,
+                    "json": {
+                        "choices": [
+                            {"message": {"role": "assistant", "content": "hello from stream"}}
+                        ]
+                    },
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+
+            store.append_fact(request)
+            store.append_fact(response)
+
+            count = export_dataset(
+                store_uri=f"sqlite:///{db_path}",
+                builder="sft",
+                session="session_1",
+                out=out_path,
+            )
+            self.assertEqual(count, 1)
+            record = json.loads(out_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(record["messages"][-1]["content"], "hello from stream")
+
+    def test_export_sft_builder_uses_canonical_tool_call_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "tool_call_sft.jsonl"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {
+                        "messages": [{"role": "user", "content": "look this up"}],
+                    },
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "status_code": 200,
+                    "canonical": {
+                        "assistant_message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": '{"q":"agent rl"}',
+                                    },
+                                }
+                            ],
+                        }
+                    },
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+
+            store.append_fact(request)
+            store.append_fact(response)
+
+            count = export_dataset(
+                store_uri=f"sqlite:///{db_path}",
+                builder="sft",
+                session="session_1",
+                out=out_path,
+            )
+            self.assertEqual(count, 1)
+            record = json.loads(out_path.read_text(encoding="utf-8").strip())
+            tool_calls = record["messages"][-1]["tool_calls"]
+            self.assertEqual(tool_calls[0]["function"]["name"], "lookup")
+            self.assertEqual(tool_calls[0]["function"]["arguments"], '{"q":"agent rl"}')
+
+    def test_export_sft_builder_from_responses_function_call_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "responses_tool_call_sft.jsonl"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/responses",
+                    "json": {"input": "look this up"},
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/responses",
+                    "status_code": 200,
+                    "json": {
+                        "output": [
+                            {
+                                "id": "fc_1",
+                                "type": "function_call",
+                                "name": "lookup",
+                                "arguments": '{"q":"agent rl"}',
+                                "call_id": "call_1",
+                            }
+                        ]
+                    },
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+
+            store.append_fact(request)
+            store.append_fact(response)
+
+            count = export_dataset(
+                store_uri=f"sqlite:///{db_path}",
+                builder="sft",
+                session="session_1",
+                out=out_path,
+            )
+            self.assertEqual(count, 1)
+            record = json.loads(out_path.read_text(encoding="utf-8").strip())
+            tool_calls = record["messages"][-1]["tool_calls"]
+            self.assertEqual(tool_calls[0]["function"]["name"], "lookup")
+            self.assertEqual(tool_calls[0]["function"]["arguments"], '{"q":"agent rl"}')
+
     def test_export_preference_builder_from_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = Path(tempdir) / "facts.db"

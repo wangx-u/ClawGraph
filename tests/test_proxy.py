@@ -12,13 +12,18 @@ from clawgraph.proxy.server import (
     ProxyConfig,
     _actor_for_path,
     _build_handler,
+    _canonical_response_payload,
+    _build_stream_response_json,
+    _extract_complete_sse_fragments,
     _extract_sse_fragments,
     _is_streaming_content_type,
     _is_streaming_request,
     _payload_from_response,
     _resolve_upstream_url,
+    _update_stream_state,
     _target_upstream,
 )
+from clawgraph.export import export_dataset
 from clawgraph.store import SQLiteFactStore
 
 
@@ -49,10 +54,37 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         return
 
 
+class _StreamingUpstreamHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        request_json = json.loads(body.decode("utf-8"))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        for token in ("echo:", request_json["messages"][-1]["content"]):
+            chunk = (
+                'data: {"choices":[{"delta":{"role":"assistant","content":"'
+                + token
+                + '"}}]}\n\n'
+            ).encode("utf-8")
+            self.wfile.write(chunk)
+            self.wfile.flush()
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+
 class ProxyCaptureTest(unittest.TestCase):
     def test_helper_functions(self) -> None:
         url = _resolve_upstream_url("https://example.com", "/v1/chat/completions")
         self.assertEqual(url, "https://example.com/v1/chat/completions")
+        responses_url = _resolve_upstream_url(
+            "https://example.com/v1/chat/completions",
+            "/v1/responses",
+        )
+        self.assertEqual(responses_url, "https://example.com/v1/responses")
         config = ProxyConfig(
             host="127.0.0.1",
             port=8080,
@@ -78,6 +110,33 @@ class ProxyCaptureTest(unittest.TestCase):
         self.assertTrue(_is_streaming_request({"stream": True}))
         self.assertTrue(_is_streaming_content_type("text/event-stream"))
 
+        canonical_chat = _canonical_response_payload(
+            path="/v1/chat/completions",
+            response_json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": '{"q":"agent rl"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+        self.assertEqual(
+            canonical_chat["assistant_message"]["tool_calls"][0]["function"]["name"],
+            "lookup",
+        )
+
         fragments = _extract_sse_fragments(
             b'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n'
             b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
@@ -85,6 +144,156 @@ class ProxyCaptureTest(unittest.TestCase):
         )
         self.assertEqual(fragments[0]["type"], "json")
         self.assertEqual(fragments[-1]["type"], "done")
+
+        stream_state = {"role": "assistant", "delta_parts": [], "fallback_text": None}
+        _update_stream_state(stream_state, fragments)
+        stream_json = _build_stream_response_json("/v1/chat/completions", stream_state)
+        self.assertEqual(
+            stream_json,
+            {"choices": [{"message": {"role": "assistant", "content": "hello"}}]},
+        )
+
+        pending = bytearray()
+        first = _extract_complete_sse_fragments(
+            pending=pending,
+            chunk=b'data: {"choices":[{"delta":{"content":"he',
+        )
+        self.assertEqual(first, [])
+        second = _extract_complete_sse_fragments(
+            pending=pending,
+            chunk=b'llo"}}]}\r\n\r\n',
+        )
+        self.assertEqual(second[0]["type"], "json")
+
+        tool_state = {
+            "role": "assistant",
+            "delta_parts": [],
+            "fallback_text": None,
+            "tool_calls": {},
+            "response_output_items": {},
+            "response_output_order": [],
+            "output_text_parts": [],
+        }
+        _update_stream_state(
+            tool_state,
+            [
+                {
+                    "type": "json",
+                    "data": {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_1",
+                                            "type": "function",
+                                            "function": {"name": "lookup", "arguments": '{"q":"he'},
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                },
+                {
+                    "type": "json",
+                    "data": {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "function": {"arguments": 'llo"}'},
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                },
+            ],
+        )
+        tool_stream_json = _build_stream_response_json("/v1/chat/completions", tool_state)
+        self.assertEqual(
+            tool_stream_json["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            "lookup",
+        )
+        self.assertEqual(
+            tool_stream_json["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+            '{"q":"hello"}',
+        )
+
+        responses_state = {
+            "role": "assistant",
+            "delta_parts": [],
+            "fallback_text": None,
+            "tool_calls": {},
+            "response_output_items": {},
+            "response_output_order": [],
+            "output_text_parts": [],
+        }
+        _update_stream_state(
+            responses_state,
+            [
+                {
+                    "type": "json",
+                    "data": {
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": {
+                            "id": "msg_1",
+                            "type": "message",
+                            "role": "assistant",
+                        },
+                    },
+                },
+                {
+                    "type": "json",
+                    "data": {
+                        "type": "response.output_text.delta",
+                        "item_id": "msg_1",
+                        "delta": "hello",
+                    },
+                },
+                {
+                    "type": "json",
+                    "data": {
+                        "type": "response.output_item.added",
+                        "output_index": 1,
+                        "item": {
+                            "id": "fc_1",
+                            "type": "function_call",
+                            "name": "lookup",
+                            "call_id": "call_1",
+                        },
+                    },
+                },
+                {
+                    "type": "json",
+                    "data": {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": "fc_1",
+                        "delta": '{"q":"world"}',
+                    },
+                },
+            ],
+        )
+        responses_json = _build_stream_response_json("/v1/responses", responses_state)
+        self.assertEqual(responses_json["output_text"], "hello")
+        self.assertEqual(responses_json["output"][0]["content"][0]["text"], "hello")
+        self.assertEqual(responses_json["output"][1]["name"], "lookup")
+        self.assertEqual(responses_json["output"][1]["arguments"], '{"q":"world"}')
+
+        canonical_responses = _canonical_response_payload(
+            path="/v1/responses",
+            response_json=responses_json,
+        )
+        self.assertEqual(
+            canonical_responses["assistant_message"]["tool_calls"][0]["function"]["name"],
+            "lookup",
+        )
 
     def test_proxy_captures_and_forwards(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -147,6 +356,72 @@ class ProxyCaptureTest(unittest.TestCase):
                 self.assertEqual(facts[0].request_id, "req_test")
                 self.assertEqual(facts[0].user_id, "user_test")
                 self.assertEqual(facts[1].request_id, "req_test")
+            finally:
+                proxy.shutdown()
+                upstream.shutdown()
+                proxy.server_close()
+                upstream.server_close()
+                proxy_thread.join(timeout=2)
+                upstream_thread.join(timeout=2)
+
+    def test_proxy_streaming_capture_supports_sft_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "sft.jsonl"
+            store_uri = f"sqlite:///{db_path}"
+
+            try:
+                upstream = ThreadingHTTPServer(("127.0.0.1", 0), _StreamingUpstreamHandler)
+            except PermissionError as exc:
+                self.skipTest(f"socket bind not permitted in sandbox: {exc}")
+            upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+            upstream_thread.start()
+
+            proxy = ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                _build_handler(
+                    ProxyConfig(
+                        host="127.0.0.1",
+                        port=0,
+                        store_uri=store_uri,
+                        model_upstream=f"http://127.0.0.1:{upstream.server_address[1]}/v1/chat/completions",
+                    )
+                ),
+            )
+            proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+            proxy_thread.start()
+
+            try:
+                payload = json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": True,
+                    }
+                ).encode("utf-8")
+                request = Request(
+                    f"http://127.0.0.1:{proxy.server_address[1]}/v1/chat/completions",
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-clawgraph-session-id": "session_stream",
+                        "x-clawgraph-request-id": "req_stream",
+                    },
+                    method="POST",
+                )
+                with urlopen(request) as response:
+                    body = response.read().decode("utf-8")
+
+                self.assertIn("data: [DONE]", body)
+
+                count = export_dataset(
+                    store_uri=store_uri,
+                    builder="sft",
+                    session="session_stream",
+                    out=out_path,
+                )
+                self.assertEqual(count, 1)
+                record = json.loads(out_path.read_text(encoding="utf-8").strip())
+                self.assertEqual(record["messages"][-1]["content"], "echo:hello")
             finally:
                 proxy.shutdown()
                 upstream.shutdown()
