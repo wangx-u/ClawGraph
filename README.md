@@ -58,9 +58,10 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
 
 - `clawgraph bootstrap`
 - `clawgraph proxy`
+- `clawgraph list readiness`
 - `clawgraph replay`
 - `clawgraph inspect`
-- `clawgraph artifact bootstrap`
+- `clawgraph pipeline run`
 - `clawgraph readiness`
 - `clawgraph export dataset`
 
@@ -69,6 +70,7 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
 - Start here: [`docs/guides/start_here.md`](docs/guides/start_here.md)
 - 15-minute path: [`docs/guides/fifteen_minute_path.md`](docs/guides/fifteen_minute_path.md)
 - OpenClaw integration: [`docs/guides/openclaw_integration.md`](docs/guides/openclaw_integration.md)
+- Workflow overview: [`docs/guides/workflow_overview.md`](docs/guides/workflow_overview.md)
 - Dataset builders: [`docs/guides/dataset_builders.md`](docs/guides/dataset_builders.md)
 - Chinese docs: [`docs/zh-CN/README.md`](docs/zh-CN/README.md)
 - Examples: [`examples/README.md`](examples/README.md)

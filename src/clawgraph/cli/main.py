@@ -12,6 +12,7 @@ from clawgraph.export import (
     build_dataset_readiness_summary,
     export_dataset,
     plan_dataset_export,
+    plan_dataset_export_for_scope,
     render_dataset_readiness,
 )
 from clawgraph.graph import (
@@ -170,6 +171,43 @@ def _artifact_signature(artifact) -> str:
     )
 
 
+def _default_export_output_path(*, session_id: str, builder: str, run_id: str | None) -> Path:
+    safe_session = session_id.replace("/", "_")
+    safe_builder = builder.replace("/", "_")
+    if run_id:
+        safe_run = run_id.replace("/", "_")
+        filename = f"{safe_session}.{safe_run}.{safe_builder}.jsonl"
+    else:
+        filename = f"{safe_session}.{safe_builder}.jsonl"
+    return Path("out") / filename
+
+
+def _persist_unique_artifacts(
+    *,
+    store: SQLiteFactStore,
+    session_id: str,
+    run_id: str | None,
+    artifacts: list,
+) -> tuple[list, int]:
+    existing_artifacts = store.list_artifacts(
+        session_id=session_id,
+        run_id=run_id,
+        latest_only=True,
+    )
+    seen_signatures = {_artifact_signature(artifact) for artifact in existing_artifacts}
+    persisted_artifacts = []
+    skipped_count = 0
+    for artifact in artifacts:
+        signature = _artifact_signature(artifact)
+        if signature in seen_signatures:
+            skipped_count += 1
+            continue
+        store.append_artifact(artifact)
+        persisted_artifacts.append(artifact)
+        seen_signatures.add(signature)
+    return persisted_artifacts, skipped_count
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="clawgraph")
     subparsers = parser.add_subparsers(dest="command")
@@ -235,6 +273,15 @@ def _build_parser() -> argparse.ArgumentParser:
     list_facts.add_argument("--kind")
     list_facts.add_argument("--actor")
     list_facts.add_argument("--json", action="store_true")
+
+    list_readiness = list_subparsers.add_parser(
+        "readiness",
+        help="List builder readiness across recent sessions",
+    )
+    list_readiness.add_argument("--store", default=DEFAULT_STORE_URI)
+    list_readiness.add_argument("--builder")
+    list_readiness.add_argument("--limit", type=int, default=20)
+    list_readiness.add_argument("--json", action="store_true")
 
     bootstrap = subparsers.add_parser("bootstrap", help="Seed a first-run session into the store")
     bootstrap_subparsers = bootstrap.add_subparsers(dest="bootstrap_command")
@@ -323,12 +370,28 @@ def _build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--builder")
     readiness.add_argument("--json", action="store_true")
 
+    pipeline = subparsers.add_parser("pipeline", help="Run a capture-to-export workflow")
+    pipeline_subparsers = pipeline.add_subparsers(dest="pipeline_command")
+    pipeline_run = pipeline_subparsers.add_parser("run", help="Plan or run one export pipeline")
+    pipeline_run.add_argument("--session", default="latest")
+    pipeline_run.add_argument("--run-id")
+    pipeline_run.add_argument("--store", default=DEFAULT_STORE_URI)
+    pipeline_run.add_argument("--builder", required=True)
+    pipeline_run.add_argument("--template", default="openclaw-defaults")
+    pipeline_run.add_argument("--skip-bootstrap", action="store_true")
+    pipeline_run.add_argument("--producer")
+    pipeline_run.add_argument("--version")
+    pipeline_run.add_argument("--artifact-status", default="active")
+    pipeline_run.add_argument("--out", type=Path)
+    pipeline_run.add_argument("--dry-run", action="store_true")
+    pipeline_run.add_argument("--json", action="store_true")
+
     return parser
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "proxy":
         run_proxy_server(
@@ -407,6 +470,21 @@ def main() -> int:
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "list" and args.list_command == "readiness":
+        store = SQLiteFactStore(args.store)
+        rows = []
+        for session_id in list(store.iter_sessions())[: args.limit]:
+            facts = store.list_facts(session_id=session_id)
+            artifacts = store.list_artifacts(session_id=session_id, latest_only=True)
+            summary = build_dataset_readiness_summary(
+                facts,
+                artifacts,
+                builder=args.builder,
+            )
+            rows.append(summary.to_dict())
+        _print_output(rows if args.json else _render_readiness_list(rows))
         return 0
 
     if args.command == "replay":
@@ -641,21 +719,12 @@ def main() -> int:
             persisted_artifacts = list(plan.artifacts)
             skipped_count = 0
             if not args.dry_run:
-                existing_artifacts = store.list_artifacts(
+                persisted_artifacts, skipped_count = _persist_unique_artifacts(
+                    store=store,
                     session_id=session_id,
                     run_id=args.run_id,
-                    latest_only=True,
+                    artifacts=plan.artifacts,
                 )
-                seen_signatures = {_artifact_signature(artifact) for artifact in existing_artifacts}
-                persisted_artifacts = []
-                for artifact in plan.artifacts:
-                    signature = _artifact_signature(artifact)
-                    if signature in seen_signatures:
-                        skipped_count += 1
-                        continue
-                    store.append_artifact(artifact)
-                    persisted_artifacts.append(artifact)
-                    seen_signatures.add(signature)
             _print_output(
                 {
                     **plan.to_dict(),
@@ -740,6 +809,110 @@ def main() -> int:
             raise SystemExit(str(exc)) from exc
         return 0
 
+    if args.command == "pipeline" and args.pipeline_command == "run":
+        try:
+            store = SQLiteFactStore(args.store)
+            session_id, facts = _load_facts_for_scope(
+                store=store,
+                session_value=args.session,
+                run_id=args.run_id,
+            )
+            existing_artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=args.run_id,
+                latest_only=True,
+            )
+            staged_artifacts = []
+            skipped_duplicates = 0
+            bootstrap_plan = None
+            if not args.skip_bootstrap:
+                producer = args.producer or f"clawgraph.{args.template}"
+                bootstrap_plan = plan_artifact_bootstrap(
+                    template=args.template,
+                    facts=facts,
+                    producer=producer,
+                    version=args.version,
+                    status=args.artifact_status,
+                )
+                seen_signatures = {_artifact_signature(artifact) for artifact in existing_artifacts}
+                for artifact in bootstrap_plan.artifacts:
+                    signature = _artifact_signature(artifact)
+                    if signature in seen_signatures:
+                        skipped_duplicates += 1
+                        continue
+                    staged_artifacts.append(artifact)
+                    seen_signatures.add(signature)
+
+            combined_artifacts = [*existing_artifacts, *staged_artifacts]
+            readiness_summary = build_dataset_readiness_summary(
+                facts,
+                combined_artifacts,
+                builder=args.builder,
+            )
+            output_path = args.out or _default_export_output_path(
+                session_id=session_id,
+                builder=args.builder,
+                run_id=args.run_id,
+            )
+            export_plan = plan_dataset_export_for_scope(
+                builder=args.builder,
+                facts=facts,
+                artifacts=combined_artifacts,
+                out=output_path,
+                run_id=args.run_id,
+            )
+
+            persisted_artifacts = []
+            exported_count = 0
+            exported = False
+            manifest_path = output_path.with_name(f"{output_path.name}.manifest.json")
+            if not args.dry_run:
+                if staged_artifacts:
+                    persisted_artifacts, skipped_duplicates = _persist_unique_artifacts(
+                        store=store,
+                        session_id=session_id,
+                        run_id=args.run_id,
+                        artifacts=staged_artifacts,
+                    )
+                if export_plan.ready:
+                    exported_count = export_dataset(
+                        store_uri=args.store,
+                        builder=args.builder,
+                        session=session_id,
+                        run_id=args.run_id,
+                        out=output_path,
+                    )
+                    exported = True
+
+            payload = {
+                "session_id": session_id,
+                "run_id": args.run_id,
+                "builder": export_plan.builder,
+                "template": None if args.skip_bootstrap else args.template,
+                "dry_run": args.dry_run,
+                "bootstrap": {
+                    "planned_count": 0 if bootstrap_plan is None else len(bootstrap_plan.artifacts),
+                    "staged_count": len(staged_artifacts),
+                    "persisted_count": 0 if args.dry_run else len(persisted_artifacts),
+                    "skipped_duplicates": skipped_duplicates,
+                    "blockers": [] if bootstrap_plan is None else bootstrap_plan.blockers,
+                },
+                "readiness": readiness_summary.to_dict(),
+                "export": {
+                    "ready": export_plan.ready,
+                    "record_count": export_plan.record_count,
+                    "blockers": export_plan.blockers,
+                    "output_path": str(output_path),
+                    "manifest_path": str(manifest_path),
+                    "exported": exported,
+                    "exported_count": exported_count,
+                },
+            }
+            _print_output(payload if args.json else _render_pipeline_run(payload))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
     parser.print_help()
     return 0
 
@@ -814,6 +987,25 @@ def _render_fact_list(session_id: str, facts: list) -> str:
     return "\n".join(lines)
 
 
+def _render_readiness_list(rows: list[dict]) -> str:
+    if not rows:
+        return "No readiness rows found."
+    lines = [f"Sessions: {len(rows)}", ""]
+    for row in rows:
+        builder_text = "; ".join(
+            (
+                f"{builder['builder']}:ready={builder['ready']},"
+                f"records={builder['predicted_records']}"
+            )
+            for builder in row["builders"]
+        )
+        lines.append(
+            f"{row['session_id']} requests={row['request_spans']} "
+            f"artifacts={row['active_artifacts']} {builder_text}"
+        )
+    return "\n".join(lines)
+
+
 def _render_export_plan(plan) -> str:
     lines = [
         f"Builder: {plan.builder}",
@@ -826,6 +1018,41 @@ def _render_export_plan(plan) -> str:
     if plan.blockers:
         lines.extend(["Blockers:"])
         lines.extend(f"- {blocker}" for blocker in plan.blockers)
+    return "\n".join(lines)
+
+
+def _render_pipeline_run(payload: dict) -> str:
+    lines = [
+        f"Session: {payload['session_id']}",
+        f"Run: {payload['run_id'] or '<all>'}",
+        f"Builder: {payload['builder']}",
+        f"Dry run: {payload['dry_run']}",
+        f"Bootstrap planned: {payload['bootstrap']['planned_count']}",
+        f"Bootstrap staged: {payload['bootstrap']['staged_count']}",
+        f"Bootstrap persisted: {payload['bootstrap']['persisted_count']}",
+        f"Skipped duplicates: {payload['bootstrap']['skipped_duplicates']}",
+    ]
+    if payload["bootstrap"]["blockers"]:
+        lines.append("Bootstrap blockers:")
+        lines.extend(f"- {blocker}" for blocker in payload["bootstrap"]["blockers"])
+    readiness = payload["readiness"]["builders"][0]
+    lines.extend(
+        [
+            f"Readiness: {readiness['ready']}",
+            f"Predicted records: {readiness['predicted_records']}",
+        ]
+    )
+    if readiness["blockers"]:
+        lines.append("Readiness blockers:")
+        lines.extend(f"- {blocker}" for blocker in readiness["blockers"])
+    lines.extend(
+        [
+            f"Output path: {payload['export']['output_path']}",
+            f"Manifest path: {payload['export']['manifest_path']}",
+            f"Exported: {payload['export']['exported']}",
+            f"Exported count: {payload['export']['exported_count']}",
+        ]
+    )
     return "\n".join(lines)
 
 

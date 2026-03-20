@@ -6,9 +6,11 @@ Use this page to choose the example that matches your integration depth.
 
 1. `examples/openclaw_quickstart`
 2. `examples/openclaw_proxy_minimal`
-3. `examples/openclaw_with_headers`
-4. `examples/openclaw_with_semantic_contract`
-5. `examples/export_to_async_rl`
+3. `examples/openclaw_python_helper`
+4. `examples/openclaw_openai_wrapper`
+5. `examples/openclaw_with_headers`
+6. `examples/openclaw_with_semantic_contract`
+7. `examples/export_to_async_rl`
 
 ## Example catalog
 
@@ -36,6 +38,32 @@ What you get:
 
 - proxy-first traffic capture
 - replay and inspection for real runs
+
+### `examples/openclaw_python_helper`
+
+Best for:
+
+- Python runtimes that want fewer manual headers
+- teams that want one helper for model calls, tool calls, and semantic events
+
+What you get:
+
+- helper-driven session reuse
+- proxy-assigned identity carried automatically
+- lower-friction semantic ingress
+
+### `examples/openclaw_openai_wrapper`
+
+Best for:
+
+- existing OpenAI SDK call sites
+- teams that want `extra_headers` injected automatically
+
+What you get:
+
+- wrapper-based header injection
+- stable ClawGraph session reuse in existing SDK-shaped code
+- optional semantic posting from the same wrapper
 
 ### `examples/openclaw_with_headers`
 

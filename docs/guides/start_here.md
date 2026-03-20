@@ -38,12 +38,14 @@ Start with:
 
 - [Quickstart](./quickstart.md)
 - [OpenClaw Integration](./openclaw_integration.md)
+- [Workflow Overview](./workflow_overview.md)
 - [Proxy Mode](./proxy_mode.md)
 
 Best next step:
 
 - point your model and tool endpoints at `clawgraph proxy`
-- add stable ids through headers
+- let ClawGraph auto-assign ids first
+- inspect replay and requests before adding more structure
 - add semantic events only for retry, fallback, and routing
 
 ### I need training data
@@ -87,9 +89,10 @@ Start with:
 1. [15-Minute Path](./fifteen_minute_path.md)
 2. [Quickstart](./quickstart.md)
 3. [OpenClaw Integration](./openclaw_integration.md)
-4. [User Stories](./user_stories.md)
-5. [Dataset Builders](./dataset_builders.md)
-6. [CLI Reference](../reference/cli_reference.md)
+4. [Workflow Overview](./workflow_overview.md)
+5. [User Stories](./user_stories.md)
+6. [Dataset Builders](./dataset_builders.md)
+7. [CLI Reference](../reference/cli_reference.md)
 
 ## Example catalog
 

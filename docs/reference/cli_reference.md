@@ -38,6 +38,16 @@ List request spans for one session or one run.
 
 List facts for one session or run with optional `--kind` or `--actor` filters.
 
+## `clawgraph list readiness`
+
+List builder readiness across recent sessions.
+
+Useful flags:
+
+- `--builder`
+- `--limit`
+- `--json`
+
 ## `clawgraph bootstrap openclaw`
 
 Seed a first-run OpenClaw-style session into the store.
@@ -128,6 +138,25 @@ Useful flags:
 
 - `--builder`
 - `--json`
+- `--run-id`
+
+## `clawgraph pipeline run`
+
+Plan or run a gated capture-to-export workflow for one session or run.
+
+What it does:
+
+- optionally derives built-in supervision artifacts
+- computes builder-specific readiness on the staged result
+- exports the dataset when the scope is ready
+
+Useful flags:
+
+- `--builder`
+- `--template`
+- `--skip-bootstrap`
+- `--out`
+- `--dry-run`
 - `--run-id`
 
 ## `clawgraph export dataset`

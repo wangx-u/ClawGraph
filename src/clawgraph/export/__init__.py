@@ -5,6 +5,7 @@ from clawgraph.export.dataset import (
     ExportPlan,
     export_dataset,
     plan_dataset_export,
+    plan_dataset_export_for_scope,
 )
 from clawgraph.export.readiness import (
     BuilderReadiness,
@@ -21,5 +22,6 @@ __all__ = [
     "build_dataset_readiness_summary",
     "export_dataset",
     "plan_dataset_export",
+    "plan_dataset_export_for_scope",
     "render_dataset_readiness",
 ]

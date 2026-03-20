@@ -6,9 +6,11 @@ Pick the example that matches what you want to do next.
 
 1. [`openclaw_quickstart`](openclaw_quickstart/README.md)
 2. [`openclaw_proxy_minimal`](openclaw_proxy_minimal/README.md)
-3. [`openclaw_with_headers`](openclaw_with_headers/README.md)
-4. [`openclaw_with_semantic_contract`](openclaw_with_semantic_contract/README.md)
-5. [`export_to_async_rl`](export_to_async_rl/README.md)
+3. [`openclaw_python_helper`](openclaw_python_helper/README.md)
+4. [`openclaw_openai_wrapper`](openclaw_openai_wrapper/README.md)
+5. [`openclaw_with_headers`](openclaw_with_headers/README.md)
+6. [`openclaw_with_semantic_contract`](openclaw_with_semantic_contract/README.md)
+7. [`export_to_async_rl`](export_to_async_rl/README.md)
 
 ## Example catalog
 
@@ -16,6 +18,8 @@ Pick the example that matches what you want to do next.
 | --- | --- | --- |
 | [`openclaw_quickstart`](openclaw_quickstart/README.md) | A full first run | Capture, one declared branch, artifacts, readiness, and export |
 | [`openclaw_proxy_minimal`](openclaw_proxy_minimal/README.md) | Lowest-friction integration | Route model and tool traffic through ClawGraph and inspect captured runs |
+| [`openclaw_python_helper`](openclaw_python_helper/README.md) | Python runtimes with minimal code changes | Auto session reuse, helper-based requests, and semantic ingress |
+| [`openclaw_openai_wrapper`](openclaw_openai_wrapper/README.md) | Existing OpenAI SDK call sites | ClawGraph header injection with minimal API changes |
 | [`openclaw_with_headers`](openclaw_with_headers/README.md) | Stable identity and correlation | Cleaner session, run, request, and user-level inspection |
 | [`openclaw_with_semantic_contract`](openclaw_with_semantic_contract/README.md) | Higher-fidelity branching | Declared retry, fallback, and routing signals for better exports |
 | [`export_to_async_rl`](export_to_async_rl/README.md) | Training handoff | SFT, preference, and binary RL exports with manifests |
@@ -26,6 +30,10 @@ Pick the example that matches what you want to do next.
   [`openclaw_quickstart`](openclaw_quickstart/README.md).
 - If you already run an OpenClaw-style stack, start with
   [`openclaw_proxy_minimal`](openclaw_proxy_minimal/README.md).
+- If you run Python and want fewer manual headers, use
+  [`openclaw_python_helper`](openclaw_python_helper/README.md).
+- If you already use the OpenAI Python SDK shape, use
+  [`openclaw_openai_wrapper`](openclaw_openai_wrapper/README.md).
 - If your replay quality depends on stable ids, use
   [`openclaw_with_headers`](openclaw_with_headers/README.md).
 - If retry and fallback correctness matters for training, use

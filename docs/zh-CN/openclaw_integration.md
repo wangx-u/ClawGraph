@@ -17,6 +17,37 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
 - replay 和 readiness
 - 后续可追加的 artifact 和 dataset export
 
+而且现在这一层是零配置优先的：
+
+- 不传 `x-clawgraph-session-id` 也能跑
+- proxy 会自动生成 `session_id / run_id / request_id`
+- 这些标识会回写到响应头
+- 浏览器风格客户端还会拿到 session cookie，后续请求可以自动复用同一个 session
+
+如果你的 runtime 是 Python，也可以直接用内置 helper，不用自己拼 header：
+
+```python
+from clawgraph import ClawGraphRuntimeClient
+
+client = ClawGraphRuntimeClient(base_url="http://127.0.0.1:8080")
+
+response = client.chat_completions(
+    {"messages": [{"role": "user", "content": "compare ART and AReaL"}]}
+)
+
+client.emit_semantic(
+    kind="retry_declared",
+    payload={"branch_id": "br_retry_1", "branch_type": "retry", "status": "succeeded"},
+)
+```
+
+如果你想直接运行仓库里的最小脚本，可以看
+[openclaw_python_helper](../../examples/openclaw_python_helper/README.md)。
+
+如果你已经在用 OpenAI Python SDK 风格的 client，也可以看
+[openclaw_openai_wrapper](../../examples/openclaw_openai_wrapper/README.md)，
+用 wrapper 自动注入 `extra_headers`。
+
 ## 建议补的请求头
 
 如果 runtime 能带上这些 header，后续 inspect 和 export 会更稳：
@@ -48,14 +79,8 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
 如果还没有 supervision，可以先跑：
 
 ```bash
-clawgraph artifact bootstrap --template openclaw-defaults --session latest
-```
-
-然后再检查：
-
-```bash
-clawgraph readiness --session latest --builder preference
-clawgraph export dataset --builder preference --session latest --dry-run
+clawgraph pipeline run --session latest --builder preference --dry-run
+clawgraph pipeline run --session latest --builder preference --out out/preference.jsonl
 ```
 
 ## 下一步

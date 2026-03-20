@@ -56,9 +56,10 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
 
 - `clawgraph bootstrap`
 - `clawgraph proxy`
+- `clawgraph list readiness`
 - `clawgraph replay`
 - `clawgraph inspect`
-- `clawgraph artifact bootstrap`
+- `clawgraph pipeline run`
 - `clawgraph readiness`
 - `clawgraph export dataset`
 
@@ -68,6 +69,7 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
 - 中文 Start Here: [`docs/zh-CN/start_here.md`](docs/zh-CN/start_here.md)
 - 中文 15 分钟路径: [`docs/zh-CN/fifteen_minute_path.md`](docs/zh-CN/fifteen_minute_path.md)
 - 中文接入说明: [`docs/zh-CN/openclaw_integration.md`](docs/zh-CN/openclaw_integration.md)
+- 中文流程总览: [`docs/zh-CN/workflow_overview.md`](docs/zh-CN/workflow_overview.md)
 - 中文数据导出: [`docs/zh-CN/dataset_builders.md`](docs/zh-CN/dataset_builders.md)
 - 英文 docs 首页: [`docs/index.md`](docs/index.md)
 - Examples: [`examples/README.md`](examples/README.md)

@@ -6,6 +6,7 @@ import json
 import socket
 from dataclasses import dataclass
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import perf_counter
 from typing import Any
@@ -25,6 +26,7 @@ _HOP_BY_HOP_HEADERS = {
     "accept-encoding",
 }
 _STREAM_CHUNK_SIZE = 4096
+_SESSION_COOKIE_NAME = "clawgraph_session_id"
 
 
 @dataclass(slots=True)
@@ -72,19 +74,34 @@ def _forward_headers(
     headers: Any,
     *,
     session_id: str,
+    run_id: str,
     request_id: str,
     user_id: str | None,
 ) -> dict[str, str]:
     forwarded: dict[str, str] = {}
     for key, value in headers.items():
-        if key.lower() in _HOP_BY_HOP_HEADERS:
+        if key.lower() in _HOP_BY_HOP_HEADERS or key.lower() == "cookie":
             continue
         forwarded[key] = value
     forwarded.setdefault("x-clawgraph-session-id", session_id)
+    forwarded.setdefault("x-clawgraph-run-id", run_id)
     forwarded.setdefault("x-clawgraph-request-id", request_id)
     if user_id:
         forwarded.setdefault("x-clawgraph-user-id", user_id)
     return forwarded
+
+
+def _cookie_value(headers: Any, name: str) -> str | None:
+    raw_cookie = headers.get("Cookie")
+    if not isinstance(raw_cookie, str) or not raw_cookie:
+        return None
+    cookie = SimpleCookie()
+    cookie.load(raw_cookie)
+    morsel = cookie.get(name)
+    if morsel is None:
+        return None
+    value = morsel.value.strip()
+    return value or None
 
 
 def _resolve_upstream_url(upstream: str, path: str) -> str:
@@ -758,6 +775,7 @@ def _copy_response_headers(
     *,
     response_headers: Any,
     session_id: str,
+    run_id: str,
     request_id: str,
     streaming: bool,
     content_length: int | None = None,
@@ -772,7 +790,12 @@ def _copy_response_headers(
     if not streaming and content_length is not None:
         handler.send_header("Content-Length", str(content_length))
     handler.send_header("x-clawgraph-session-id", session_id)
+    handler.send_header("x-clawgraph-run-id", run_id)
     handler.send_header("x-clawgraph-request-id", request_id)
+    handler.send_header(
+        "Set-Cookie",
+        f"{_SESSION_COOKIE_NAME}={session_id}; Path=/; HttpOnly; SameSite=Lax",
+    )
 
 
 def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
@@ -862,6 +885,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                     headers=_forward_headers(
                         self.headers,
                         session_id=session_id,
+                        run_id=run_id,
                         request_id=request_id,
                         user_id=user_id,
                     ),
@@ -925,6 +949,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                             body=response_body,
                             content_type=content_type,
                             session_id=session_id,
+                            run_id=run_id,
                             request_id=request_id,
                             response_headers=response.headers,
                         )
@@ -1005,9 +1030,14 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                 return header_session
 
             if isinstance(request_json, dict):
-                value = request_json.get("session_id")
-                if isinstance(value, str) and value:
-                    return value
+                for key in ("session_id", "conversation_id", "thread_id"):
+                    value = request_json.get(key)
+                    if isinstance(value, str) and value:
+                        return value
+
+            cookie_session = _cookie_value(self.headers, _SESSION_COOKIE_NAME)
+            if cookie_session:
+                return cookie_session
 
             return f"sess_{uuid4().hex}"
 
@@ -1016,9 +1046,10 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
             if header_run:
                 return header_run
             if isinstance(request_json, dict):
-                value = request_json.get("run_id")
-                if isinstance(value, str) and value:
-                    return value
+                for key in ("run_id", "task_id"):
+                    value = request_json.get(key)
+                    if isinstance(value, str) and value:
+                        return value
             return session_id
 
         def _resolve_request_id(self, request_json: dict[str, Any] | list[Any] | None) -> str:
@@ -1060,6 +1091,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                     ),
                     content_type="application/json",
                     session_id=session_id,
+                    run_id=run_id,
                     request_id=request_id,
                 )
                 return
@@ -1073,6 +1105,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                     body=json.dumps({"error": "semantic kind is required"}).encode("utf-8"),
                     content_type="application/json",
                     session_id=session_id,
+                    run_id=run_id,
                     request_id=request_id,
                 )
                 return
@@ -1084,6 +1117,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                     ),
                     content_type="application/json",
                     session_id=session_id,
+                    run_id=run_id,
                     request_id=request_id,
                 )
                 return
@@ -1117,6 +1151,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                 body=body,
                 content_type="application/json",
                 session_id=session_id,
+                run_id=run_id,
                 request_id=request_id,
             )
 
@@ -1183,6 +1218,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                 body=body_bytes,
                 content_type=content_type,
                 session_id=session_id,
+                run_id=run_id,
                 request_id=request_id,
             )
 
@@ -1210,6 +1246,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                 self,
                 response_headers=response_headers,
                 session_id=session_id,
+                run_id=run_id,
                 request_id=request_id,
                 streaming=True,
             )
@@ -1317,6 +1354,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
             body: bytes,
             content_type: str,
             session_id: str,
+            run_id: str,
             request_id: str,
             response_headers: Any | None = None,
         ) -> None:
@@ -1325,12 +1363,18 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("x-clawgraph-session-id", session_id)
+                self.send_header("x-clawgraph-run-id", run_id)
                 self.send_header("x-clawgraph-request-id", request_id)
+                self.send_header(
+                    "Set-Cookie",
+                    f"{_SESSION_COOKIE_NAME}={session_id}; Path=/; HttpOnly; SameSite=Lax",
+                )
             else:
                 _copy_response_headers(
                     self,
                     response_headers=response_headers,
                     session_id=session_id,
+                    run_id=run_id,
                     request_id=request_id,
                     streaming=False,
                     content_length=len(body),

@@ -14,6 +14,7 @@ from clawgraph.proxy.server import (
     _build_handler,
     _canonical_response_payload,
     _build_stream_response_json,
+    _cookie_value,
     _extract_complete_sse_fragments,
     _extract_sse_fragments,
     _is_streaming_content_type,
@@ -28,8 +29,11 @@ from clawgraph.store import SQLiteFactStore
 
 
 class _UpstreamHandler(BaseHTTPRequestHandler):
+    last_cookie: str | None = None
+
     def do_POST(self) -> None:  # noqa: N802
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        type(self).last_cookie = self.headers.get("Cookie")
         request_json = json.loads(body.decode("utf-8"))
         response_body = json.dumps(
             {
@@ -98,6 +102,10 @@ class ProxyCaptureTest(unittest.TestCase):
         self.assertEqual(_actor_for_path("/v1/chat/completions"), "model")
         self.assertEqual(_actor_for_path("/v1/responses"), "model")
         self.assertEqual(_actor_for_path("/tools/run"), "tool")
+        self.assertEqual(
+            _cookie_value({"Cookie": "clawgraph_session_id=sess_cookie"}, "clawgraph_session_id"),
+            "sess_cookie",
+        )
 
         payload = _payload_from_response(
             path="/v1/chat/completions",
@@ -347,6 +355,7 @@ class ProxyCaptureTest(unittest.TestCase):
 
                 self.assertEqual(body["choices"][0]["message"]["content"], "echo:hello")
                 self.assertEqual(echoed_request_id, "req_test")
+                self.assertIsNone(_UpstreamHandler.last_cookie)
 
                 store = SQLiteFactStore(store_uri)
                 facts = store.list_facts("session_test")
@@ -422,6 +431,92 @@ class ProxyCaptureTest(unittest.TestCase):
                 self.assertEqual(count, 1)
                 record = json.loads(out_path.read_text(encoding="utf-8").strip())
                 self.assertEqual(record["messages"][-1]["content"], "echo:hello")
+            finally:
+                proxy.shutdown()
+                upstream.shutdown()
+                proxy.server_close()
+                upstream.server_close()
+                proxy_thread.join(timeout=2)
+                upstream_thread.join(timeout=2)
+
+    def test_proxy_auto_assigns_session_cookie_without_manual_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            store_uri = f"sqlite:///{db_path}"
+
+            try:
+                upstream = ThreadingHTTPServer(("127.0.0.1", 0), _UpstreamHandler)
+            except PermissionError as exc:
+                self.skipTest(f"socket bind not permitted in sandbox: {exc}")
+            upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+            upstream_thread.start()
+
+            proxy = ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                _build_handler(
+                    ProxyConfig(
+                        host="127.0.0.1",
+                        port=0,
+                        store_uri=store_uri,
+                        model_upstream=f"http://127.0.0.1:{upstream.server_address[1]}/v1/chat/completions",
+                    )
+                ),
+            )
+            proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+            proxy_thread.start()
+
+            try:
+                payload = json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "hello"}],
+                    }
+                ).encode("utf-8")
+                url = f"http://127.0.0.1:{proxy.server_address[1]}/v1/chat/completions"
+
+                first_request = Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(first_request) as response:
+                    first_session_id = response.headers.get("x-clawgraph-session-id")
+                    first_run_id = response.headers.get("x-clawgraph-run-id")
+                    first_request_id = response.headers.get("x-clawgraph-request-id")
+                    cookie_header = response.headers.get("Set-Cookie")
+                    response.read()
+
+                self.assertIsNotNone(first_session_id)
+                self.assertEqual(first_run_id, first_session_id)
+                self.assertTrue(first_request_id.startswith("req_"))
+                self.assertIn("clawgraph_session_id=", cookie_header)
+
+                second_request = Request(
+                    url,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Cookie": cookie_header,
+                    },
+                    method="POST",
+                )
+                with urlopen(second_request) as response:
+                    second_session_id = response.headers.get("x-clawgraph-session-id")
+                    second_run_id = response.headers.get("x-clawgraph-run-id")
+                    second_request_id = response.headers.get("x-clawgraph-request-id")
+                    response.read()
+
+                self.assertEqual(second_session_id, first_session_id)
+                self.assertEqual(second_run_id, first_session_id)
+                self.assertNotEqual(second_request_id, first_request_id)
+                self.assertIsNone(_UpstreamHandler.last_cookie)
+
+                store = SQLiteFactStore(store_uri)
+                facts = store.list_facts(first_session_id)
+                request_ids = [fact.request_id for fact in facts if fact.kind == "request_started"]
+                self.assertEqual(len(request_ids), 2)
+                self.assertEqual(facts[0].run_id, first_session_id)
+                self.assertEqual(facts[2].run_id, first_session_id)
             finally:
                 proxy.shutdown()
                 upstream.shutdown()

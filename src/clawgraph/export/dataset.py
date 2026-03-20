@@ -113,6 +113,28 @@ def plan_dataset_export(
     if not facts:
         raise ValueError("no facts found in scope")
     artifacts = store.list_artifacts(session_id=session_id, run_id=run_id, latest_only=True)
+    return plan_dataset_export_for_scope(
+        builder=builder,
+        facts=facts,
+        artifacts=artifacts,
+        out=out,
+        run_id=run_id,
+    )
+
+
+def plan_dataset_export_for_scope(
+    *,
+    builder: str,
+    facts: list[FactEvent],
+    artifacts: list[ArtifactRecord],
+    out: Path | None = None,
+    run_id: str | None = None,
+) -> ExportPlan:
+    """Plan an export directly from facts and artifacts already loaded in memory."""
+
+    if not facts:
+        raise ValueError("no facts found in scope")
+    session_id = facts[0].session_id
     canonical_builder = _canonical_builder(builder)
     records = build_records_for_builder(
         builder=canonical_builder,

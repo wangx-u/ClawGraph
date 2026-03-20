@@ -85,6 +85,20 @@ clawgraph export dataset --builder preference --session latest --out out/prefere
 If you need the full builder model and heuristics, read
 [Dataset Builders](./dataset_builders.md).
 
+If you want one command that stages supervision, checks readiness, and exports
+when ready, use:
+
+```bash
+clawgraph pipeline run --session latest --builder preference --dry-run
+clawgraph pipeline run --session latest --builder preference --out out/preference.jsonl
+```
+
+If you need a platform-style view across recent sessions, use:
+
+```bash
+clawgraph list readiness --builder preference
+```
+
 ## What to do next
 
 - If you want a gentler first read, go to [Start Here](./start_here.md).

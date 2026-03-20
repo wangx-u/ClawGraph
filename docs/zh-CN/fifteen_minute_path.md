@@ -55,6 +55,19 @@ clawgraph export dataset --builder preference --session latest --dry-run
 clawgraph export dataset --builder preference --session latest --out out/preference.jsonl
 ```
 
+如果你想把“补监督 + 看 readiness + 导出”收成一条正式流程，可以直接用：
+
+```bash
+clawgraph pipeline run --session latest --builder preference --dry-run
+clawgraph pipeline run --session latest --builder preference --out out/preference.jsonl
+```
+
+如果你想先从平台视角看最近哪些 session 已经可导出，可以用：
+
+```bash
+clawgraph list readiness --builder preference
+```
+
 ## 接下来该看什么
 
 - 如果你主要关心 replay 和调试：

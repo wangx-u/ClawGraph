@@ -75,8 +75,21 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
   --store sqlite:///clawgraph.db
 ```
 
+For real runtime capture, the default path is now:
+
+```bash
+clawgraph proxy ...
+clawgraph inspect session --session latest
+clawgraph replay --session latest
+clawgraph pipeline run --session latest --builder preference --dry-run
+```
+
+You only need to add stable ids or semantic events later if replay grouping or
+branch fidelity needs to improve.
+
 Next:
 
 - follow [15-Minute Path](./fifteen_minute_path.md) if you want a single capture-to-export flow
 - read [OpenClaw Integration](./openclaw_integration.md) before wiring a real runtime
+- read [Workflow Overview](./workflow_overview.md) for manual versus automated paths
 - read [Dataset Builders](./dataset_builders.md) before exporting larger batches

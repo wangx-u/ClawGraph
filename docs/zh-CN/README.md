@@ -9,6 +9,7 @@
 | 第一次接触 ClawGraph | [Start Here](./start_here.md) |
 | 一路从首跑走到导出 | [15 分钟路径](./fifteen_minute_path.md) |
 | 接入 OpenClaw / OpenAI-compatible runtime | [接入说明](./openclaw_integration.md) |
+| 看完整流程怎么分层 | [流程总览](./workflow_overview.md) |
 | 理解数据导出和 builder | [数据导出](./dataset_builders.md) |
 
 ## 建议阅读顺序
@@ -16,7 +17,8 @@
 1. 先看 [Start Here](./start_here.md)
 2. 再看 [15 分钟路径](./fifteen_minute_path.md)
 3. 接真实 runtime 时看 [接入说明](./openclaw_integration.md)
-4. 准备训练数据时看 [数据导出](./dataset_builders.md)
+4. 再看 [流程总览](./workflow_overview.md)
+5. 准备训练数据时看 [数据导出](./dataset_builders.md)
 
 ## 当前中文覆盖
 
@@ -24,6 +26,7 @@
 - 中文 Start Here
 - 中文 15 分钟路径
 - 中文接入说明
+- 中文流程总览
 - 中文数据导出
 
 更底层的协议、schema 和完整 CLI 参考目前仍以英文文档为主。

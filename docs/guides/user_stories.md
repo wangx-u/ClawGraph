@@ -18,9 +18,9 @@ Typical workflow:
 
 1. Start with `clawgraph bootstrap openclaw` if you need a first-run baseline.
 2. Route model and tool traffic through `clawgraph proxy` for real runtime capture.
-3. Add `x-clawgraph-session-id`, `x-clawgraph-run-id`, `x-clawgraph-request-id`, and `x-clawgraph-user-id`.
-4. Use `clawgraph list requests --session latest` or `--run-id <run>`.
-5. Drill into one request with `clawgraph inspect request --session latest --request-id latest`.
+3. Let ClawGraph auto-assign `session_id`, `run_id`, and `request_id` first.
+4. Use `clawgraph inspect session --session latest`, `clawgraph list requests --session latest`, and `clawgraph replay --session latest`.
+5. Add stable ids and semantic events only where replay grouping or branch fidelity needs to improve.
 
 ## 2. RL engineer
 
@@ -35,10 +35,9 @@ Typical workflow:
 
 1. Bootstrap or capture runs once.
 2. Discover sessions and requests with `clawgraph list`.
-3. Start with `clawgraph artifact bootstrap --template openclaw-defaults --session latest --dry-run`.
-4. Persist the template when the preview looks right.
-5. Check `clawgraph readiness --session latest --builder preference` or scope to `--run-id`.
-6. Use `clawgraph export dataset --builder preference --session latest --dry-run` before writing files.
+3. Use `clawgraph pipeline run --session latest --builder preference --dry-run` for one gated preview.
+4. Run the same command without `--dry-run` to persist template artifacts and export in one pass.
+5. Drop down to `artifact bootstrap`, `readiness`, and `export dataset` only when you need finer control.
 
 ## 3. Evaluator
 
@@ -64,7 +63,8 @@ You need a simple control-plane style answer:
 Typical workflow:
 
 1. Seed or capture sessions regularly.
-2. Inspect session summaries and branch sources.
-3. Prefer declared semantic branches where fidelity matters.
-4. Keep artifact status explicit: `active` versus `superseded`.
-5. Use `readiness --builder ...` plus `export dataset --dry-run`, scoped by session or run, as the gate before writing files.
+2. Use `clawgraph list readiness --builder preference` to scan the most recent sessions first.
+3. Inspect session summaries and branch sources where readiness is low or branch fidelity matters.
+4. Prefer declared semantic branches where fidelity matters.
+5. Keep artifact status explicit: `active` versus `superseded`.
+6. Use `clawgraph pipeline run ... --dry-run` or `export dataset --dry-run` as the final gate before writing files.

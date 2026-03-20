@@ -47,6 +47,7 @@ export default defineConfig({
             { text: "15-Minute Path", link: "/guides/fifteen_minute_path" },
             { text: "Quickstart", link: "/guides/quickstart" },
             { text: "Examples", link: "/guides/examples" },
+            { text: "Workflow Overview", link: "/guides/workflow_overview" },
             { text: "User Stories", link: "/guides/user_stories" },
             { text: "OpenClaw Integration", link: "/guides/openclaw_integration" },
           ]
@@ -74,6 +75,7 @@ export default defineConfig({
             { text: "Start Here", link: "/zh-CN/start_here" },
             { text: "15 分钟路径", link: "/zh-CN/fifteen_minute_path" },
             { text: "接入说明", link: "/zh-CN/openclaw_integration" },
+            { text: "流程总览", link: "/zh-CN/workflow_overview" },
             { text: "数据导出", link: "/zh-CN/dataset_builders" }
           ]
         }
