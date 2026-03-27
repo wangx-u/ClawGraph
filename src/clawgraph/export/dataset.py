@@ -6,10 +6,18 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from clawgraph.graph import build_branch_inspect_summaries, build_comparable_branch_pairs
+from clawgraph.builders import BuildContext, get_dataset_builder, register_dataset_builder
+from clawgraph.graph import (
+    build_branch_inspect_summaries,
+    build_comparable_branch_pairs,
+    correlate_request_groups,
+    infer_branches,
+    partition_facts_by_run,
+)
 from clawgraph.protocol.models import ArtifactRecord, FactEvent
+from clawgraph.protocol.semantics import extract_prompt_messages
 from clawgraph.store import SQLiteFactStore
 
 SUPPORTED_BUILDERS = ("facts", "sft", "preference", "binary_rl")
@@ -25,6 +33,7 @@ _BINARY_RL_ARTIFACT_TYPES = {
     "binary_label",
     "label",
 }
+_BUILTIN_BUILDERS_REGISTERED = False
 
 
 @dataclass(slots=True)
@@ -50,6 +59,37 @@ class ExportPlan:
         return payload
 
 
+@dataclass(slots=True)
+class _BuiltinDatasetBuilder:
+    """Adapter for one built-in dataset builder."""
+
+    name: str
+    build_fn: Callable[[list[FactEvent], list[ArtifactRecord]], list[dict[str, Any]]]
+    blocker_fn: Callable[[list[FactEvent], list[ArtifactRecord], list[dict[str, Any]]], list[str]]
+    aliases: tuple[str, ...] = ()
+
+    def build_records(
+        self,
+        *,
+        facts: list[FactEvent],
+        artifacts: list[ArtifactRecord],
+        context: BuildContext | None = None,
+    ) -> list[dict[str, Any]]:
+        del context
+        return self.build_fn(facts, artifacts)
+
+    def blockers(
+        self,
+        *,
+        facts: list[FactEvent],
+        artifacts: list[ArtifactRecord],
+        records: list[dict[str, Any]],
+        context: BuildContext | None = None,
+    ) -> list[str]:
+        del context
+        return self.blocker_fn(facts, artifacts, records)
+
+
 def _fact_to_json(fact: FactEvent) -> dict[str, Any]:
     return {
         "fact_id": fact.fact_id,
@@ -70,6 +110,273 @@ def _fact_to_json(fact: FactEvent) -> dict[str, Any]:
     }
 
 
+def _build_request_records_by_fact_id(
+    facts: list[FactEvent],
+) -> dict[str, dict[str, Any]]:
+    """Build reusable request-centric records from captured facts."""
+
+    groups = correlate_request_groups(facts)
+    _, request_branch_map = infer_branches(groups, facts=facts)
+    records: dict[str, dict[str, Any]] = {}
+
+    for group in groups:
+        request = group.request
+        request_json = request.payload.get("json")
+        input_messages = _request_input_messages(request.payload)
+        output_message = (
+            _extract_assistant_message(group.response.payload)
+            if group.response is not None
+            else None
+        )
+
+        record: dict[str, Any] = {
+            "session_id": request.session_id,
+            "run_id": request.run_id,
+            "request_id": request.request_id or request.fact_id,
+            "request_fact_id": request.fact_id,
+            "actor": request.actor,
+            "path": group.path,
+            "branch_id": request_branch_map.get(request.fact_id),
+            "outcome": group.outcome,
+        }
+        if input_messages:
+            record["input_messages"] = list(input_messages)
+            record["messages"] = list(input_messages)
+        if output_message is not None:
+            record["output_message"] = output_message
+            record["messages"] = [*(record.get("messages") or []), output_message]
+        if request_json is not None:
+            record["request_payload"] = request_json
+        response_record = (
+            _response_record(group.response.payload) if group.response is not None else None
+        )
+        if response_record is not None:
+            record["response"] = response_record
+            record["response_fact_id"] = group.response.fact_id
+        error_record = _error_record(group.error.payload) if group.error is not None else None
+        if error_record is not None:
+            record["error"] = error_record
+            record["error_fact_id"] = group.error.fact_id
+        records[request.fact_id] = record
+
+    return records
+
+
+def _build_branch_records_by_key(
+    facts: list[FactEvent],
+) -> tuple[list[Any], dict[tuple[str, str], dict[str, Any]]]:
+    """Build branch-level self-contained trajectories keyed by run and branch id."""
+
+    branch_summaries = build_branch_inspect_summaries(facts)
+    request_records_by_fact_id = _build_request_records_by_fact_id(facts)
+    branch_records: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for branch in branch_summaries:
+        steps = [
+            request_records_by_fact_id[request_fact_id]
+            for request_fact_id in branch.request_fact_ids
+            if request_fact_id in request_records_by_fact_id
+        ]
+        branch_records[(branch.run_id, branch.branch_id)] = {
+            "session_id": facts[0].session_id,
+            "run_id": branch.run_id,
+            "branch_id": branch.branch_id,
+            "branch_type": branch.branch_type,
+            "status": branch.status,
+            "source": branch.source,
+            "parent_branch_id": branch.parent_branch_id,
+            "request_ids": list(branch.request_ids),
+            "request_fact_ids": list(branch.request_fact_ids),
+            "prompt": _branch_prompt(steps),
+            "trajectory": steps,
+            "terminal_output": _terminal_output(steps),
+        }
+
+    return branch_summaries, branch_records
+
+
+def _build_run_records(
+    facts: list[FactEvent],
+    *,
+    request_records_by_fact_id: dict[str, dict[str, Any]],
+    branch_records_by_key: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Build run-scoped records for session-level supervision targets."""
+
+    run_records: dict[str, dict[str, Any]] = {}
+    for run_id, run_facts in partition_facts_by_run(facts):
+        request_steps = [
+            request_records_by_fact_id[fact.fact_id]
+            for fact in run_facts
+            if fact.kind == "request_started" and fact.fact_id in request_records_by_fact_id
+        ]
+        branch_steps = [
+            branch_record
+            for (branch_run_id, _), branch_record in branch_records_by_key.items()
+            if branch_run_id == run_id
+        ]
+        run_records[run_id] = {
+            "session_id": run_facts[0].session_id,
+            "run_id": run_id,
+            "prompt": _first_non_empty_prompt(request_steps, branch_steps),
+            "requests": request_steps,
+            "branches": branch_steps,
+        }
+    return run_records
+
+
+def _response_record(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a compact response record that remains training-usable."""
+
+    record: dict[str, Any] = {}
+    for key in (
+        "status_code",
+        "content_type",
+        "streamed",
+        "stream_complete",
+        "client_disconnected",
+        "chunk_count",
+        "ttfb_ms",
+        "total_latency_ms",
+        "stream_duration_ms",
+    ):
+        if key in payload:
+            record[key] = payload[key]
+    assistant_message = _extract_assistant_message(payload)
+    if assistant_message is not None:
+        record["assistant_message"] = assistant_message
+    elif "canonical" in payload:
+        record["canonical"] = payload["canonical"]
+    elif "json" in payload:
+        record["json"] = payload["json"]
+    elif "text" in payload:
+        record["text"] = payload["text"]
+    elif "preview" in payload:
+        record["preview"] = payload["preview"]
+    return record or None
+
+
+def _error_record(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a compact error record."""
+
+    record: dict[str, Any] = {}
+    for key in ("status_code", "error", "error_code", "content_type", "ttfb_ms", "total_latency_ms"):
+        if key in payload:
+            record[key] = payload[key]
+    if "json" in payload:
+        record["json"] = payload["json"]
+    elif "text" in payload:
+        record["text"] = payload["text"]
+    return record or None
+
+
+def _branch_prompt(steps: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """Return the first prompt found within a branch trajectory."""
+
+    for step in steps:
+        prompt = step.get("input_messages")
+        if isinstance(prompt, list) and prompt:
+            return prompt
+    return None
+
+
+def _terminal_output(steps: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the terminal supervision-relevant output for a trajectory."""
+
+    for step in reversed(steps):
+        output_message = step.get("output_message")
+        if isinstance(output_message, dict):
+            return {"type": "assistant_message", "message": output_message}
+        response = step.get("response")
+        if isinstance(response, dict):
+            return {"type": "response", "response": response}
+        error = step.get("error")
+        if isinstance(error, dict):
+            return {"type": "error", "error": error}
+    return None
+
+
+def _first_non_empty_prompt(
+    request_steps: list[dict[str, Any]],
+    branch_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """Return the first prompt available inside a run."""
+
+    for step in request_steps:
+        prompt = step.get("input_messages")
+        if isinstance(prompt, list) and prompt:
+            return prompt
+    for branch in branch_steps:
+        prompt = branch.get("prompt")
+        if isinstance(prompt, list) and prompt:
+            return prompt
+    return None
+
+
+def _shared_prompt(
+    chosen: dict[str, Any],
+    rejected: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Return a shared prompt when both preference sides refer to the same prompt."""
+
+    chosen_prompt = chosen.get("prompt")
+    rejected_prompt = rejected.get("prompt")
+    if isinstance(chosen_prompt, list) and chosen_prompt == rejected_prompt:
+        return chosen_prompt
+    if isinstance(chosen_prompt, list) and rejected_prompt is None:
+        return chosen_prompt
+    if isinstance(rejected_prompt, list) and chosen_prompt is None:
+        return rejected_prompt
+    return None
+
+
+def _prompts_conflict(chosen: dict[str, Any], rejected: dict[str, Any]) -> bool:
+    chosen_prompt = chosen.get("prompt")
+    rejected_prompt = rejected.get("prompt")
+    return (
+        isinstance(chosen_prompt, list)
+        and isinstance(rejected_prompt, list)
+        and chosen_prompt != rejected_prompt
+    )
+
+
+def _resolve_branch_key(
+    *,
+    branch_id: str,
+    run_id: str | None,
+    branch_records_by_key: dict[tuple[str, str], dict[str, Any]],
+) -> tuple[str, str] | None:
+    """Resolve a branch id with optional run scoping."""
+
+    if run_id is not None and (run_id, branch_id) in branch_records_by_key:
+        return run_id, branch_id
+    matches = [key for key in branch_records_by_key if key[1] == branch_id]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _build_context(
+    *,
+    facts: list[FactEvent],
+    builder: str,
+    run_id: str | None = None,
+) -> BuildContext:
+    resolved_run_id = run_id
+    if resolved_run_id is None:
+        run_ids = sorted({fact.run_id for fact in facts})
+        resolved_run_id = run_ids[0] if len(run_ids) == 1 else None
+    return BuildContext(
+        session_id=facts[0].session_id if facts else None,
+        run_id=resolved_run_id,
+        selection_query={
+            "builder": builder,
+            "session_id": facts[0].session_id if facts else None,
+            "run_id": resolved_run_id,
+        },
+    )
+
+
 def build_records_for_builder(
     *,
     builder: str,
@@ -78,16 +385,15 @@ def build_records_for_builder(
 ) -> list[dict[str, Any]]:
     """Build in-memory records for one builder."""
 
-    canonical_builder = _canonical_builder(builder)
-    if canonical_builder == "facts":
-        return _build_facts(facts)
-    if canonical_builder == "sft":
-        return _build_sft(facts)
-    if canonical_builder == "preference":
-        return _build_preference(facts, artifacts)
-    if canonical_builder == "binary_rl":
-        return _build_binary_rl(facts, artifacts)
-    raise ValueError(f"unsupported builder: {builder}")
+    _ensure_builtin_builders_registered()
+    builder_impl = get_dataset_builder(builder)
+    return list(
+        builder_impl.build_records(
+            facts=facts,
+            artifacts=artifacts,
+            context=_build_context(facts=facts, builder=builder_impl.name),
+        )
+    )
 
 
 def plan_dataset_export(
@@ -101,24 +407,38 @@ def plan_dataset_export(
     """Plan an export and return predicted records plus manifest metadata."""
 
     store = SQLiteFactStore(store_uri)
-    session_id = (
-        None
-        if session == "latest" and run_id is not None
-        else store.get_latest_session_id() if session == "latest" else session
-    )
-    if session_id is None and run_id is None:
+    resolved_run_id = run_id
+    resolved_session_id: str | None
+    if resolved_run_id is not None:
+        resolved_session_id = store.get_session_id_for_run(resolved_run_id)
+        if resolved_session_id is None:
+            raise ValueError(f"run not found: {resolved_run_id}")
+        if session not in {None, "latest"} and session != resolved_session_id:
+            raise ValueError(
+                f"run {resolved_run_id} belongs to session {resolved_session_id}, not {session}"
+            )
+    else:
+        resolved_session_id = store.get_latest_session_id() if session == "latest" else session
+        if resolved_session_id is not None:
+            resolved_run_id = store.get_latest_run_id(session_id=resolved_session_id)
+
+    if resolved_session_id is None and resolved_run_id is None:
         raise ValueError("no sessions found in store")
 
-    facts = store.list_facts(session_id=session_id, run_id=run_id)
+    facts = store.list_facts(session_id=resolved_session_id, run_id=resolved_run_id)
     if not facts:
         raise ValueError("no facts found in scope")
-    artifacts = store.list_artifacts(session_id=session_id, run_id=run_id, latest_only=True)
+    artifacts = store.list_artifacts(
+        session_id=resolved_session_id,
+        run_id=resolved_run_id,
+        latest_only=True,
+    )
     return plan_dataset_export_for_scope(
         builder=builder,
         facts=facts,
         artifacts=artifacts,
         out=out,
-        run_id=run_id,
+        run_id=resolved_run_id,
     )
 
 
@@ -135,20 +455,22 @@ def plan_dataset_export_for_scope(
     if not facts:
         raise ValueError("no facts found in scope")
     session_id = facts[0].session_id
-    canonical_builder = _canonical_builder(builder)
+    _ensure_builtin_builders_registered()
+    builder_impl = get_dataset_builder(builder)
     records = build_records_for_builder(
-        builder=canonical_builder,
+        builder=builder_impl.name,
         facts=facts,
         artifacts=artifacts,
     )
     blockers = _blockers_for_builder(
-        builder=canonical_builder,
+        builder=builder_impl.name,
         facts=facts,
         artifacts=artifacts,
         records=records,
+        run_id=run_id,
     )
     manifest = _build_manifest(
-        builder=canonical_builder,
+        builder=builder_impl.name,
         session_id=session_id,
         facts=facts,
         artifacts=artifacts,
@@ -158,7 +480,7 @@ def plan_dataset_export_for_scope(
         run_id=run_id,
     )
     return ExportPlan(
-        builder=canonical_builder,
+        builder=builder_impl.name,
         session_id=facts[0].session_id,
         run_id=run_id,
         output_path=str(out) if out is not None else None,
@@ -221,11 +543,7 @@ def _build_sft(facts: list[FactEvent]) -> list[dict[str, Any]]:
             continue
 
         request = requests_by_id[parent_ref]
-        request_json = request.payload.get("json")
-        if not isinstance(request_json, dict):
-            continue
-
-        messages = _extract_prompt_messages(request_json)
+        messages = _request_input_messages(request.payload)
         message = _extract_assistant_message(fact.payload)
         if messages is None or message is None:
             continue
@@ -235,9 +553,14 @@ def _build_sft(facts: list[FactEvent]) -> list[dict[str, Any]]:
         samples.append(
             {
                 "session_id": fact.session_id,
+                "run_id": fact.run_id,
                 "request_fact_id": request.fact_id,
                 "response_fact_id": fact.fact_id,
+                "request_id": request.request_id,
+                "prompt": list(messages),
+                "completion": message,
                 "messages": sample_messages,
+                "supervision": {"type": "sft"},
                 "lineage": {
                     "builder": "sft",
                     "fact_ids": [request.fact_id, fact.fact_id],
@@ -253,8 +576,7 @@ def _build_preference(
     facts: list[FactEvent],
     artifacts: list[ArtifactRecord],
 ) -> list[dict[str, Any]]:
-    branch_summaries = build_branch_inspect_summaries(facts)
-    branch_by_id = {branch.branch_id: branch for branch in branch_summaries}
+    branch_summaries, branch_records_by_key = _build_branch_records_by_key(facts)
     records: list[dict[str, Any]] = []
 
     active_preference_artifacts = [
@@ -263,33 +585,43 @@ def _build_preference(
         if artifact.status == "active" and artifact.artifact_type in _PREFERENCE_ARTIFACT_TYPES
     ]
     for artifact in active_preference_artifacts:
-        records.extend(_preference_records_from_artifact(artifact, branch_by_id))
+        records.extend(
+            _preference_records_from_artifact(
+                artifact,
+                branch_records_by_key=branch_records_by_key,
+            )
+        )
 
     if records:
         return records
 
-    for pair in build_comparable_branch_pairs(branch_summaries):
-        chosen = branch_by_id[pair.chosen_branch_id]
-        rejected = branch_by_id[pair.rejected_branch_id]
-        records.append(
-            {
-                "session_id": facts[0].session_id,
-                "chosen": {
-                    "branch_id": chosen.branch_id,
-                    "request_ids": chosen.request_ids,
-                },
-                "rejected": {
-                    "branch_id": rejected.branch_id,
-                    "request_ids": rejected.request_ids,
-                },
-                "source": pair.source,
-                "lineage": {
-                    "builder": "preference",
-                    "source_branch_ids": [chosen.branch_id, rejected.branch_id],
-                    "artifact_id": None,
-                },
-            }
-        )
+    branch_summaries_by_run: dict[str, list[Any]] = {}
+    for summary in branch_summaries:
+        branch_summaries_by_run.setdefault(summary.run_id, []).append(summary)
+
+    for run_id, run_branch_summaries in branch_summaries_by_run.items():
+        for pair in build_comparable_branch_pairs(run_branch_summaries):
+            chosen_key = _resolve_branch_key(
+                branch_id=pair.chosen_branch_id,
+                run_id=run_id,
+                branch_records_by_key=branch_records_by_key,
+            )
+            rejected_key = _resolve_branch_key(
+                branch_id=pair.rejected_branch_id,
+                run_id=run_id,
+                branch_records_by_key=branch_records_by_key,
+            )
+            if chosen_key is None or rejected_key is None:
+                continue
+            record = _make_preference_record(
+                artifact=None,
+                source=pair.source,
+                reason=pair.reason,
+                chosen=branch_records_by_key[chosen_key],
+                rejected=branch_records_by_key[rejected_key],
+            )
+            if record is not None:
+                records.append(record)
     return records
 
 
@@ -298,8 +630,13 @@ def _build_binary_rl(
     artifacts: list[ArtifactRecord],
 ) -> list[dict[str, Any]]:
     facts_by_id = {fact.fact_id: fact for fact in facts}
-    branch_summaries = build_branch_inspect_summaries(facts)
-    branch_by_id = {branch.branch_id: branch for branch in branch_summaries}
+    request_records_by_fact_id = _build_request_records_by_fact_id(facts)
+    _, branch_records_by_key = _build_branch_records_by_key(facts)
+    run_records = _build_run_records(
+        facts,
+        request_records_by_fact_id=request_records_by_fact_id,
+        branch_records_by_key=branch_records_by_key,
+    )
     records: list[dict[str, Any]] = []
 
     for artifact in artifacts:
@@ -313,20 +650,67 @@ def _build_binary_rl(
         target: dict[str, Any]
         if target_type == "fact" and target_id in facts_by_id:
             fact = facts_by_id[target_id]
+            request_record: dict[str, Any] | None = None
+            if fact.kind == "request_started":
+                request_record = request_records_by_fact_id.get(fact.fact_id)
+            elif fact.parent_ref is not None:
+                request_record = request_records_by_fact_id.get(fact.parent_ref)
             target = {
                 "type": "fact",
                 "fact_id": fact.fact_id,
                 "request_id": fact.request_id,
+                "run_id": fact.run_id,
                 "kind": fact.kind,
                 "actor": fact.actor,
+                **({"trajectory": request_record} if request_record is not None else {}),
             }
-        elif target_type == "branch" and target_id in branch_by_id:
-            branch = branch_by_id[target_id]
+        elif target_type == "branch":
+            branch_key = _resolve_branch_key(
+                branch_id=target_id,
+                run_id=artifact.run_id,
+                branch_records_by_key=branch_records_by_key,
+            )
+            if branch_key is None:
+                target = {
+                    "type": "branch",
+                    "target_ref": artifact.target_ref,
+                }
+            else:
+                branch = branch_records_by_key[branch_key]
+                target = {
+                    "type": "branch",
+                    "branch_id": branch["branch_id"],
+                    "run_id": branch["run_id"],
+                    "request_ids": branch["request_ids"],
+                    "status": branch["status"],
+                    "trajectory": branch["trajectory"],
+                    "prompt": branch["prompt"],
+                    "terminal_output": branch["terminal_output"],
+                }
+        elif target_type == "run":
+            resolved_run_id = artifact.run_id or target_id
+            if resolved_run_id in run_records:
+                run_record = run_records[resolved_run_id]
+                target = {
+                    "type": "run",
+                    "run_id": run_record["run_id"],
+                    "prompt": run_record["prompt"],
+                    "requests": run_record["requests"],
+                    "branches": run_record["branches"],
+                }
+            else:
+                target = {
+                    "type": "run",
+                    "target_ref": artifact.target_ref,
+                }
+        elif target_type in {None, "session"} and artifact.run_id in run_records:
+            run_record = run_records[artifact.run_id]
             target = {
-                "type": "branch",
-                "branch_id": branch.branch_id,
-                "request_ids": branch.request_ids,
-                "status": branch.status,
+                "type": "run",
+                "run_id": run_record["run_id"],
+                "prompt": run_record["prompt"],
+                "requests": run_record["requests"],
+                "branches": run_record["branches"],
             }
         else:
             target = {
@@ -337,10 +721,18 @@ def _build_binary_rl(
         records.append(
             {
                 "session_id": facts[0].session_id,
+                "run_id": artifact.run_id,
                 "target": target,
                 "reward": reward,
                 "artifact_type": artifact.artifact_type,
                 "confidence": artifact.confidence,
+                "supervision": {
+                    "type": "binary_rl",
+                    "artifact_type": artifact.artifact_type,
+                    "reward": reward,
+                    "confidence": artifact.confidence,
+                    "payload": artifact.payload,
+                },
                 "lineage": {
                     "builder": "binary_rl",
                     "artifact_id": artifact.artifact_id,
@@ -354,6 +746,29 @@ def _build_binary_rl(
 
 def _blockers_for_builder(
     *,
+    builder: str,
+    facts: list[FactEvent],
+    artifacts: list[ArtifactRecord],
+    records: list[dict[str, Any]],
+    run_id: str | None = None,
+) -> list[str]:
+    _ensure_builtin_builders_registered()
+    builder_impl = get_dataset_builder(builder)
+    return list(
+        builder_impl.blockers(
+            facts=facts,
+            artifacts=artifacts,
+            records=records,
+            context=_build_context(
+                facts=facts,
+                builder=builder_impl.name,
+                run_id=run_id,
+            ),
+        )
+    )
+
+
+def _builtin_blockers_for_builder(
     builder: str,
     facts: list[FactEvent],
     artifacts: list[ArtifactRecord],
@@ -388,9 +803,63 @@ def _blockers_for_builder(
     raise ValueError(f"unsupported builder: {builder}")
 
 
+def _ensure_builtin_builders_registered() -> None:
+    global _BUILTIN_BUILDERS_REGISTERED
+    if _BUILTIN_BUILDERS_REGISTERED:
+        return
+
+    builtin_builders = (
+        _BuiltinDatasetBuilder(
+            name="facts",
+            build_fn=lambda facts, artifacts: _build_facts(facts),
+            blocker_fn=lambda facts, artifacts, records: _builtin_blockers_for_builder(
+                "facts",
+                facts,
+                artifacts,
+                records,
+            ),
+        ),
+        _BuiltinDatasetBuilder(
+            name="sft",
+            build_fn=lambda facts, artifacts: _build_sft(facts),
+            blocker_fn=lambda facts, artifacts, records: _builtin_blockers_for_builder(
+                "sft",
+                facts,
+                artifacts,
+                records,
+            ),
+        ),
+        _BuiltinDatasetBuilder(
+            name="preference",
+            build_fn=_build_preference,
+            blocker_fn=lambda facts, artifacts, records: _builtin_blockers_for_builder(
+                "preference",
+                facts,
+                artifacts,
+                records,
+            ),
+        ),
+        _BuiltinDatasetBuilder(
+            name="binary_rl",
+            aliases=("binary-rl",),
+            build_fn=_build_binary_rl,
+            blocker_fn=lambda facts, artifacts, records: _builtin_blockers_for_builder(
+                "binary_rl",
+                facts,
+                artifacts,
+                records,
+            ),
+        ),
+    )
+    for builder in builtin_builders:
+        register_dataset_builder(builder)
+    _BUILTIN_BUILDERS_REGISTERED = True
+
+
 def _preference_records_from_artifact(
     artifact: ArtifactRecord,
-    branch_by_id: dict[str, Any],
+    *,
+    branch_records_by_key: dict[tuple[str, str], dict[str, Any]],
 ) -> list[dict[str, Any]]:
     payload = artifact.payload
     if artifact.artifact_type == "ranking":
@@ -400,60 +869,104 @@ def _preference_records_from_artifact(
         branch_ids = [branch_id for branch_id in ordered if isinstance(branch_id, str)]
         if len(branch_ids) < 2:
             return []
-        chosen_id = branch_ids[0]
-        return [
-            _make_preference_record(
-                artifact=artifact,
-                chosen_branch_id=chosen_id,
-                rejected_branch_id=rejected_id,
-                branch_by_id=branch_by_id,
+        chosen_key = _resolve_branch_key(
+            branch_id=branch_ids[0],
+            run_id=artifact.run_id,
+            branch_records_by_key=branch_records_by_key,
+        )
+        if chosen_key is None:
+            return []
+        records: list[dict[str, Any]] = []
+        for rejected_id in branch_ids[1:]:
+            rejected_key = _resolve_branch_key(
+                branch_id=rejected_id,
+                run_id=artifact.run_id,
+                branch_records_by_key=branch_records_by_key,
             )
-            for rejected_id in branch_ids[1:]
-            if rejected_id in branch_by_id and chosen_id in branch_by_id
-        ]
+            if rejected_key is None:
+                continue
+            record = _make_preference_record(
+                artifact=artifact,
+                source=artifact.artifact_type,
+                reason=_string_value(payload.get("reason")),
+                chosen=branch_records_by_key[chosen_key],
+                rejected=branch_records_by_key[rejected_key],
+            )
+            if record is not None:
+                records.append(record)
+        return records
 
     chosen_id = _string_value(payload.get("chosen") or payload.get("chosen_branch_id"))
     rejected_id = _string_value(payload.get("rejected") or payload.get("rejected_branch_id"))
     if chosen_id is None or rejected_id is None:
         return []
-    if chosen_id not in branch_by_id or rejected_id not in branch_by_id:
+    chosen_key = _resolve_branch_key(
+        branch_id=chosen_id,
+        run_id=artifact.run_id,
+        branch_records_by_key=branch_records_by_key,
+    )
+    rejected_key = _resolve_branch_key(
+        branch_id=rejected_id,
+        run_id=artifact.run_id,
+        branch_records_by_key=branch_records_by_key,
+    )
+    if chosen_key is None or rejected_key is None:
         return []
-    return [
-        _make_preference_record(
-            artifact=artifact,
-            chosen_branch_id=chosen_id,
-            rejected_branch_id=rejected_id,
-            branch_by_id=branch_by_id,
-        )
-    ]
+    record = _make_preference_record(
+        artifact=artifact,
+        source=artifact.artifact_type,
+        reason=_string_value(payload.get("reason")),
+        chosen=branch_records_by_key[chosen_key],
+        rejected=branch_records_by_key[rejected_key],
+    )
+    return [record] if record is not None else []
 
 
 def _make_preference_record(
     *,
-    artifact: ArtifactRecord,
-    chosen_branch_id: str,
-    rejected_branch_id: str,
-    branch_by_id: dict[str, Any],
-) -> dict[str, Any]:
-    chosen = branch_by_id[chosen_branch_id]
-    rejected = branch_by_id[rejected_branch_id]
+    artifact: ArtifactRecord | None,
+    source: str,
+    reason: str | None,
+    chosen: dict[str, Any],
+    rejected: dict[str, Any],
+) -> dict[str, Any] | None:
+    shared_prompt = _shared_prompt(chosen, rejected)
+    allow_prompt_mismatch = bool(
+        artifact is not None and artifact.payload.get("allow_prompt_mismatch")
+    )
+    if _prompts_conflict(chosen, rejected) and not allow_prompt_mismatch:
+        return None
     return {
-        "session_id": artifact.session_id,
+        "session_id": chosen["session_id"],
+        "run_id": chosen["run_id"],
+        "prompt": shared_prompt,
         "chosen": {
-            "branch_id": chosen.branch_id,
-            "request_ids": chosen.request_ids,
-            "status": chosen.status,
+            "branch_id": chosen["branch_id"],
+            "request_ids": chosen["request_ids"],
+            "status": chosen["status"],
+            "prompt": chosen["prompt"],
+            "trajectory": chosen["trajectory"],
+            "terminal_output": chosen["terminal_output"],
         },
         "rejected": {
-            "branch_id": rejected.branch_id,
-            "request_ids": rejected.request_ids,
-            "status": rejected.status,
+            "branch_id": rejected["branch_id"],
+            "request_ids": rejected["request_ids"],
+            "status": rejected["status"],
+            "prompt": rejected["prompt"],
+            "trajectory": rejected["trajectory"],
+            "terminal_output": rejected["terminal_output"],
         },
-        "source": artifact.artifact_type,
+        "source": source,
+        "supervision": {
+            "type": "preference",
+            "source": source,
+            "reason": reason,
+            "confidence": artifact.confidence if artifact is not None else None,
+        },
         "lineage": {
             "builder": "preference",
-            "artifact_id": artifact.artifact_id,
-            "target_ref": artifact.target_ref,
+            "artifact_id": artifact.artifact_id if artifact is not None else None,
+            "target_ref": artifact.target_ref if artifact is not None else None,
         },
     }
 
@@ -488,6 +1001,16 @@ def _manifest_path(out: Path) -> Path:
     return out.with_name(f"{out.name}.manifest.json")
 
 
+def _request_input_messages(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+    request_json = payload.get("json")
+    if isinstance(request_json, dict):
+        return extract_prompt_messages(request_json)
+    input_messages = payload.get("input_messages")
+    if isinstance(input_messages, list):
+        return [item for item in input_messages if isinstance(item, dict)] or None
+    return None
+
+
 def _build_manifest(
     *,
     builder: str,
@@ -513,24 +1036,6 @@ def _build_manifest(
         "artifact_count": len(artifacts),
         "artifact_ids": [artifact.artifact_id for artifact in artifacts],
     }
-
-
-def _extract_prompt_messages(request_json: dict[str, Any]) -> list[dict[str, Any]] | None:
-    messages = request_json.get("messages")
-    if isinstance(messages, list):
-        normalized = _normalize_messages(messages)
-        return normalized if normalized else None
-
-    input_value = request_json.get("input")
-    if isinstance(input_value, str):
-        return [{"role": "user", "content": input_value}]
-    if isinstance(input_value, dict):
-        normalized = _normalize_messages([input_value])
-        return normalized if normalized else None
-    if isinstance(input_value, list):
-        normalized = _normalize_messages(input_value)
-        return normalized if normalized else None
-    return None
 
 
 def _extract_assistant_message(response_payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -570,21 +1075,6 @@ def _extract_assistant_message(response_payload: dict[str, Any]) -> dict[str, An
         if normalized is not None:
             return normalized
     return None
-
-
-def _normalize_messages(items: list[Any]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        role = item.get("role")
-        if not isinstance(role, str) or not role:
-            continue
-        content = _normalize_content(item.get("content"))
-        if content is None:
-            continue
-        normalized.append({"role": role, "content": content})
-    return normalized
 
 
 def _normalize_assistant_message(value: Any) -> dict[str, Any] | None:
@@ -672,11 +1162,15 @@ def _normalize_tool_calls(value: Any) -> list[dict[str, Any]]:
 def _normalize_content(value: Any) -> str | None:
     if isinstance(value, str):
         return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
     if isinstance(value, dict):
-        for key in ("text", "content"):
+        for key in ("text", "content", "value", "output"):
             nested = _normalize_content(value.get(key))
             if nested is not None:
                 return nested
+        if value:
+            return json.dumps(value, ensure_ascii=True, sort_keys=True)
         return None
     if isinstance(value, list):
         parts: list[str] = []
@@ -687,6 +1181,7 @@ def _normalize_content(value: Any) -> str | None:
                     item.get("text")
                     or item.get("content")
                     or item.get("value")
+                    or item.get("output")
                 )
             elif isinstance(item, str):
                 text = item
@@ -694,6 +1189,8 @@ def _normalize_content(value: Any) -> str | None:
                 parts.append(text)
         if parts:
             return "\n".join(parts)
+        if value:
+            return json.dumps(value, ensure_ascii=True, sort_keys=True)
     return None
 
 
@@ -701,3 +1198,6 @@ def _string_value(value: Any) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+_ensure_builtin_builders_registered()

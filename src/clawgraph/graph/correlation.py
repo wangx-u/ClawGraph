@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from clawgraph.protocol.semantics import request_payload_fingerprint
 from clawgraph.protocol.models import BranchRecord, FactEvent
 
 
@@ -70,8 +71,28 @@ class CorrelatedRequestGroup:
         return None
 
 
+def partition_facts_by_run(facts: list[FactEvent]) -> list[tuple[str, list[FactEvent]]]:
+    """Partition ordered facts into ordered per-run slices."""
+
+    facts_by_run: dict[str, list[FactEvent]] = {}
+    for fact in facts:
+        facts_by_run.setdefault(fact.run_id, []).append(fact)
+    return list(facts_by_run.items())
+
+
 def correlate_request_groups(facts: list[FactEvent]) -> list[CorrelatedRequestGroup]:
     """Correlate requests with response chunks, final responses, and errors."""
+
+    groups: list[CorrelatedRequestGroup] = []
+    for _, run_facts in partition_facts_by_run(facts):
+        groups.extend(_correlate_request_groups_for_run(run_facts))
+    return groups
+
+
+def _correlate_request_groups_for_run(
+    facts: list[FactEvent],
+) -> list[CorrelatedRequestGroup]:
+    """Correlate request groups for a single run."""
 
     groups: dict[str, CorrelatedRequestGroup] = {}
     ordered_request_ids: list[str] = []
@@ -103,6 +124,35 @@ def infer_branches(
     facts: list[FactEvent] | None = None,
 ) -> tuple[list[BranchRecord], dict[str, str]]:
     """Infer a basic branch structure from correlated request groups."""
+
+    if not groups:
+        return [], {}
+
+    groups_by_run: dict[str, list[CorrelatedRequestGroup]] = {}
+    for group in groups:
+        groups_by_run.setdefault(group.request.run_id, []).append(group)
+
+    facts_by_run = {
+        run_id: run_facts for run_id, run_facts in partition_facts_by_run(facts or [])
+    }
+    branches: list[BranchRecord] = []
+    request_branch_map: dict[str, str] = {}
+    for run_id, run_groups in groups_by_run.items():
+        run_branches, run_request_branch_map = _infer_branches_for_run(
+            run_groups,
+            facts=facts_by_run.get(run_id),
+        )
+        branches.extend(run_branches)
+        request_branch_map.update(run_request_branch_map)
+    return branches, request_branch_map
+
+
+def _infer_branches_for_run(
+    groups: list[CorrelatedRequestGroup],
+    *,
+    facts: list[FactEvent] | None = None,
+) -> tuple[list[BranchRecord], dict[str, str]]:
+    """Infer branches for one run without crossing run boundaries."""
 
     if not groups:
         return [], {}
@@ -216,7 +266,7 @@ def infer_branches(
                 )
             )
         else:
-            signature = (group.actor, group.path)
+            signature = _retry_signature(group.request)
             previous = previous_by_signature.get(signature)
             if previous is not None and previous.outcome == "failed":
                 branch_counter += 1
@@ -381,3 +431,29 @@ def _string_value(value: Any) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _retry_signature(request_fact: FactEvent) -> tuple[str, str, str | None, str | None, str | None, str | None]:
+    return (
+        request_fact.actor,
+        _request_path(request_fact),
+        request_fact.user_id,
+        request_fact.thread_id,
+        request_fact.task_id,
+        _request_payload_fingerprint(request_fact.payload),
+    )
+
+
+def _request_path(request_fact: FactEvent) -> str:
+    value = request_fact.payload.get("path")
+    return str(value) if value is not None else "<unknown>"
+
+
+def _request_payload_fingerprint(payload: dict[str, Any]) -> str | None:
+    existing_fingerprint = payload.get("request_fingerprint")
+    if isinstance(existing_fingerprint, str) and existing_fingerprint:
+        return existing_fingerprint
+    request_json = payload.get("json")
+    if not isinstance(request_json, dict):
+        return None
+    return request_payload_fingerprint(request_json)

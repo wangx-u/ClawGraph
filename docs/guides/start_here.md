@@ -1,12 +1,16 @@
 # Start Here
 
-If you are new to ClawGraph, start with the shortest path that matches your
-goal.
+If you are new to ClawGraph, pick the next job you actually need to do.
 
-## Fastest first run
+ClawGraph is easiest to learn in three steps:
 
-Use this if you want to see the full loop locally before connecting a real
-runtime.
+- validate one local run
+- connect a real runtime
+- export training data from captured runs
+
+## 1. Validate one local run
+
+Use this if you want one complete local loop before touching a real runtime.
 
 ```bash
 python -m venv .venv
@@ -22,33 +26,45 @@ clawgraph export dataset --builder preference --session latest --dry-run
 
 You will get:
 
-- one complete OpenClaw-style session
+- one complete OpenClaw-style session with one run
 - one declared retry branch
 - ready-to-inspect artifacts
 - a preview of what preference export would write
 
-If you want one continuous guide from local validation to real runtime capture
-and export, use [15-Minute Path](./fifteen_minute_path.md).
+Next:
 
-## Choose the path that matches your job
+- if you want a runnable repository example, open [`examples/openclaw_quickstart`](../../examples/openclaw_quickstart/README.md)
+- if you want one continuous guide from local validation to export, use [15-Minute Path](./fifteen_minute_path.md)
 
-### I run an OpenClaw-style runtime
+## 2. Connect a real runtime
+
+Use this if you already have an OpenClaw-style or OpenAI-compatible runtime and
+want capture with minimal code changes.
 
 Start with:
 
-- [Quickstart](./quickstart.md)
 - [OpenClaw Integration](./openclaw_integration.md)
-- [Workflow Overview](./workflow_overview.md)
 - [Proxy Mode](./proxy_mode.md)
+- [Workflow Overview](./workflow_overview.md)
 
-Best next step:
+Recommended default:
 
-- point your model and tool endpoints at `clawgraph proxy`
+- point model and tool endpoints at `clawgraph proxy`
 - let ClawGraph auto-assign ids first
-- inspect replay and requests before adding more structure
-- add semantic events only for retry, fallback, and routing
+- inspect the session before adding more structure
+- add stable ids only when replay grouping is weak
+- add semantic events only for retry, fallback, and routing decisions
 
-### I need training data
+Best runnable examples:
+
+- [`examples/openclaw_proxy_minimal`](../../examples/openclaw_proxy_minimal/README.md)
+- [`examples/openclaw_python_helper`](../../examples/openclaw_python_helper/README.md)
+- [`examples/openclaw_openai_wrapper`](../../examples/openclaw_openai_wrapper/README.md)
+
+## 3. Export training data
+
+Use this if you already have captured runs and need training-ready JSONL plus
+manifest files.
 
 Start with:
 
@@ -56,47 +72,27 @@ Start with:
 - [Export to Async RL](./export_to_async_rl.md)
 - [CLI Reference](../reference/cli_reference.md)
 
-Best next step:
+Recommended default:
 
-- inspect readiness by builder
-- bootstrap supervision from captured runs
-- export `sft`, `preference`, or `binary_rl`
+- inspect the session first, then choose a run if there are multiple runs
+- bootstrap built-in supervision before hand-authoring artifacts
+- run `readiness` before `export dataset`
+- use `pipeline run --dry-run` as the last gate before writing files
 
-### I need better debugging before training
+Best runnable example:
 
-Start with:
+- [`examples/export_to_async_rl`](../../examples/export_to_async_rl/README.md)
 
-- [Replay and Debug](./replay_and_debug.md)
-- [Branching](../concepts/branching.md)
-- [Artifact Protocol](../concepts/artifact_protocol.md)
+## Keep this mental model
 
-Best next step:
+- `session` is the durable container
+- `run` is one execution episode inside that session
+- inspect and replay start from the session view
+- readiness, bootstrap, pipeline, and export are run-oriented by default
 
-- inspect session, request, and branch views
-- compare inferred and declared branches
-- keep artifacts explicit and versioned
+## Use these as reference after the first run
 
-### I want the product mental model first
-
-Start with:
-
-- [What is ClawGraph](../overview/what_is_clawgraph.md)
-- [Architecture](../overview/architecture.md)
-- [Why Not Tracing](../overview/why_not_tracing.md)
-
-## Recommended reading order
-
-1. [15-Minute Path](./fifteen_minute_path.md)
-2. [Quickstart](./quickstart.md)
-3. [OpenClaw Integration](./openclaw_integration.md)
-4. [Workflow Overview](./workflow_overview.md)
-5. [User Stories](./user_stories.md)
-6. [Dataset Builders](./dataset_builders.md)
-7. [CLI Reference](../reference/cli_reference.md)
-
-## Example catalog
-
-Examples are organized by integration depth in [Examples](./examples.md).
-
-If you are browsing the repository directly, the source files live under the
-`examples/` directory.
+- [Replay and Debug](./replay_and_debug.md) for investigation workflow
+- [Examples](./examples.md) for runnable repository paths
+- [User Stories](./user_stories.md) for role-specific flows
+- [What is ClawGraph](../overview/what_is_clawgraph.md), [Architecture](../overview/architecture.md), and [Why Not Tracing](../overview/why_not_tracing.md) for product context

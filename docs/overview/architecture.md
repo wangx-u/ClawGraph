@@ -22,7 +22,9 @@ The boundary is deliberate:
 
 ### Proxy Capture Layer
 
-Intercepts model, tool, and subagent traffic with low integration friction.
+Intercepts model and tool traffic with low integration friction.
+Subagent activity becomes visible when it is routed through those surfaces or
+when the runtime emits context or semantic hints.
 
 ### Immutable Fact Log
 
@@ -30,8 +32,21 @@ Stores append-only source facts. This is the only source of truth.
 
 ### Graph / Replay Views
 
-Derives reusable views such as sessions, episodes, branches, and replay
+Derives reusable views such as sessions, runs, branches, and replay
 timelines.
+
+## Scope model
+
+ClawGraph uses a small identity model throughout the CLI, replay, and export
+layers:
+
+- `session`: durable container for related user or application activity
+- `run`: one execution episode inside a session
+- `request`: one model, tool, or runtime call inside a run
+- `branch`: one alternate path inside a run
+
+In v1, `run` is the concrete episode unit used by builders, readiness checks,
+and export commands.
 
 ### Artifact Engine
 

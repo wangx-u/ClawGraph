@@ -28,7 +28,7 @@ clawgraph export dataset --builder preference --session latest --dry-run
 
 What this gives you:
 
-- a complete OpenClaw-style session
+- a complete OpenClaw-style session with one run
 - one declared retry branch
 - score and preference artifacts
 - a dry-run export preview
@@ -61,6 +61,13 @@ Add semantic events only where they improve training fidelity:
 
 Use the full [OpenClaw Integration](./openclaw_integration.md) guide if you are
 deciding how much runtime structure to add.
+
+Terminology to keep in mind:
+
+- `session` is the durable container
+- `run` is one execution episode inside that session
+- inspect and replay commands default to the full session view
+- readiness and export commands default to the latest run unless you pass `--run-id`
 
 ## Step 3. Turn captured runs into training data
 

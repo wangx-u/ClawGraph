@@ -1,7 +1,7 @@
 {
   "session_id": "sess_openclaw_1",
-  "run_id": "sess_openclaw_1",
-  "request_id": "req_retry_1",
+  "run_id": "run_openclaw_1",
+  "request_id": "evt_retry_declared_1",
   "kind": "retry_declared",
   "fact_ref": "fact_request_retry_1",
   "payload": {

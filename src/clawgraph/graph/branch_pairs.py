@@ -22,7 +22,7 @@ def build_comparable_branch_pairs(
 ) -> list[ComparableBranchPair]:
     """Return related branch pairs instead of all succeeded-versus-failed combinations."""
 
-    branch_by_id = {branch.branch_id: branch for branch in branches}
+    branch_by_key = {(branch.run_id, branch.branch_id): branch for branch in branches}
     seen: set[tuple[str, str, str]] = set()
     pairs: list[ComparableBranchPair] = []
 
@@ -52,7 +52,7 @@ def build_comparable_branch_pairs(
     for branch in branches:
         if branch.parent_branch_id is None:
             continue
-        parent = branch_by_id.get(branch.parent_branch_id)
+        parent = branch_by_key.get((branch.run_id, branch.parent_branch_id))
         if parent is None:
             continue
         if branch.status == "succeeded" and parent.status == "failed":
@@ -71,13 +71,13 @@ def build_comparable_branch_pairs(
             )
 
     # Compare sibling alternatives that share the same parent branch.
-    siblings_by_parent: dict[str, list[BranchInspectSummary]] = {}
+    siblings_by_parent: dict[tuple[str, str], list[BranchInspectSummary]] = {}
     for branch in branches:
         if branch.parent_branch_id is None:
             continue
-        siblings_by_parent.setdefault(branch.parent_branch_id, []).append(branch)
+        siblings_by_parent.setdefault((branch.run_id, branch.parent_branch_id), []).append(branch)
 
-    for parent_branch_id, siblings in siblings_by_parent.items():
+    for (run_id, parent_branch_id), siblings in siblings_by_parent.items():
         succeeded = [branch for branch in siblings if branch.status == "succeeded"]
         failed = [branch for branch in siblings if branch.status == "failed"]
         for chosen in succeeded:
@@ -88,7 +88,7 @@ def build_comparable_branch_pairs(
                     source="sibling_outcome",
                     reason=(
                         f"{chosen.branch_id} succeeded while sibling {rejected.branch_id} "
-                        f"under parent {parent_branch_id} failed"
+                        f"under parent {parent_branch_id} in run {run_id} failed"
                     ),
                 )
 

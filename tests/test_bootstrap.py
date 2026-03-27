@@ -22,6 +22,7 @@ class BootstrapTest(unittest.TestCase):
             builders = {builder.builder: builder for builder in readiness.builders}
 
             self.assertEqual(result.request_ids, ["req_main_1", "req_retry_1"])
+            self.assertNotEqual(result.session_id, result.run_id)
             self.assertTrue(builders["sft"].ready)
             self.assertTrue(builders["preference"].ready)
             self.assertTrue(builders["binary_rl"].ready)

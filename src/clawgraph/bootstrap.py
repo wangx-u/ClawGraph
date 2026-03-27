@@ -35,8 +35,9 @@ def bootstrap_openclaw_session(
 ) -> BootstrapResult:
     """Seed a realistic OpenClaw-style session into the local store."""
 
-    session_id = session_id or f"sess_openclaw_seed_{uuid4().hex[:12]}"
-    run_id = run_id or session_id
+    session_seed = uuid4().hex[:12]
+    session_id = session_id or f"sess_openclaw_seed_{session_seed}"
+    run_id = run_id or f"run_openclaw_seed_{uuid4().hex[:12]}"
     store = SQLiteFactStore(store_uri)
     if session_id in set(store.iter_sessions()):
         raise ValueError(f"session already exists: {session_id}")
@@ -117,7 +118,7 @@ def bootstrap_openclaw_session(
             "branch_type": "retry",
             "status": "succeeded",
         },
-        request_id="req_retry_1",
+        request_id="req_semantic_retry_1",
         user_id=user_id,
         metadata={"capture_source": "bootstrap"},
     )

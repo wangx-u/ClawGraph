@@ -9,6 +9,7 @@ from pathlib import Path
 from clawgraph import ClawGraphOpenAIClient
 from clawgraph.proxy import ProxyConfig
 from clawgraph.proxy.server import _build_handler
+from clawgraph.protocol.factories import new_fact_event
 from clawgraph.store import SQLiteFactStore
 
 
@@ -84,6 +85,33 @@ class RuntimeOpenAIWrapperTest(unittest.TestCase):
         self.assertEqual(headers["x-trace-id"], "trace_1")
         self.assertEqual(headers["x-clawgraph-parent-id"], "fact_parent_1")
 
+    def test_wrapper_can_rotate_runs_without_rotating_session(self) -> None:
+        client = _FakeOpenAIClient(base_url="http://127.0.0.1:8080")
+        wrapped = ClawGraphOpenAIClient(client)
+
+        first = wrapped.chat.completions.create(
+            model="gpt-test",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        first_headers = first["extra_headers"]
+
+        second_run_id = wrapped.start_new_run()
+        second = wrapped.responses.create(
+            model="gpt-test",
+            input="hello",
+        )
+        second_headers = second["extra_headers"]
+
+        self.assertEqual(
+            first_headers["x-clawgraph-session-id"],
+            second_headers["x-clawgraph-session-id"],
+        )
+        self.assertEqual(second_headers["x-clawgraph-run-id"], second_run_id)
+        self.assertNotEqual(
+            first_headers["x-clawgraph-run-id"],
+            second_headers["x-clawgraph-run-id"],
+        )
+
     def test_wrapper_degrades_to_chat_only_when_responses_is_missing(self) -> None:
         client = _FakeChatOnlyClient(base_url="http://127.0.0.1:8080")
         wrapped = ClawGraphOpenAIClient(client)
@@ -143,21 +171,38 @@ class RuntimeOpenAIWrapperTest(unittest.TestCase):
                     model="gpt-test",
                     messages=[{"role": "user", "content": "hello"}],
                 )
+                store = SQLiteFactStore(store_uri)
+                request_fact = new_fact_event(
+                    run_id=wrapped.session.run_id or "run_test",
+                    session_id=wrapped.session.session_id or "session_test",
+                    actor="model",
+                    kind="request_started",
+                    payload={"path": "/v1/chat/completions"},
+                    request_id=wrapped.session.last_request_id,
+                )
+                store.append_fact(request_fact)
                 semantic_response = wrapped.emit_semantic(
                     kind="retry_declared",
                     payload={
-                        "branch_id": "br_retry_wrapper_1",
                         "branch_type": "retry",
                         "status": "succeeded",
                     },
+                    branch_id="br_retry_wrapper_1",
                 )
                 self.assertEqual(semantic_response.status_code, 202)
 
-                store = SQLiteFactStore(store_uri)
                 facts = store.list_facts(wrapped.session.session_id)
                 semantic_facts = [fact for fact in facts if fact.kind == "semantic_event"]
                 self.assertEqual(len(semantic_facts), 1)
                 self.assertEqual(semantic_facts[0].run_id, wrapped.session.run_id)
+                self.assertEqual(
+                    semantic_facts[0].payload["payload"]["request_id"],
+                    wrapped.session.last_request_id,
+                )
+                self.assertEqual(
+                    semantic_facts[0].payload["payload"]["branch_id"],
+                    "br_retry_wrapper_1",
+                )
             finally:
                 proxy.shutdown()
                 upstream.shutdown()

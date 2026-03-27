@@ -29,6 +29,7 @@ What is automatic:
 
 - proxy capture
 - generated `session_id`, `run_id`, and `request_id`
+- session and current-run reuse for cookie-backed browser clients
 - replay and inspect views
 - pipeline preview on the latest captured session
 
@@ -37,6 +38,13 @@ What stays optional:
 - stable ids through headers
 - semantic events
 - custom artifacts
+
+Recommended mental model:
+
+- `session` is the durable container you inspect first
+- `run` is one execution episode inside that session
+- inspect and replay stay session-oriented by default
+- readiness, artifact bootstrap, pipeline, and export are run-oriented by default
 
 ## 2. Semi-automatic pipeline
 
@@ -59,6 +67,8 @@ What is automatic:
 - built-in supervision bootstrap
 - builder-specific readiness
 - dataset export plus manifest
+- latest-run selection inside one session when `--run-id` is omitted
+- recent-run scanning for `clawgraph list readiness`
 
 What stays manual:
 

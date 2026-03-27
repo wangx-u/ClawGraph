@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from clawgraph.protocol.models import ArtifactRecord, FactEvent
+from clawgraph.protocol.validation import validate_artifact_record, validate_fact_event
 
 
 def new_fact_event(
@@ -25,7 +26,7 @@ def new_fact_event(
 ) -> FactEvent:
     """Create a new immutable fact event with standard defaults."""
 
-    return FactEvent(
+    fact = FactEvent(
         fact_id=f"fact_{uuid4().hex}",
         schema_version="v1",
         run_id=run_id,
@@ -42,6 +43,8 @@ def new_fact_event(
         branch_id=branch_id,
         metadata=metadata or {},
     )
+    validate_fact_event(fact)
+    return fact
 
 
 def new_artifact_record(
@@ -60,7 +63,7 @@ def new_artifact_record(
 ) -> ArtifactRecord:
     """Create a new artifact record with standard defaults."""
 
-    return ArtifactRecord(
+    artifact = ArtifactRecord(
         artifact_id=f"art_{uuid4().hex}",
         schema_version="v1",
         artifact_type=artifact_type,
@@ -76,6 +79,8 @@ def new_artifact_record(
         supersedes_artifact_id=supersedes_artifact_id,
         metadata=metadata or {},
     )
+    validate_artifact_record(artifact)
+    return artifact
 
 
 def new_semantic_event_fact(

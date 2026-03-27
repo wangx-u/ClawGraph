@@ -77,6 +77,11 @@ class ArtifactBootstrapTest(unittest.TestCase):
             )
             self.assertTrue(plan.ready)
             self.assertEqual(len(plan.artifacts), 3)
+            preference_artifacts = [
+                artifact for artifact in plan.artifacts if artifact.artifact_type == "preference"
+            ]
+            self.assertEqual(len(preference_artifacts), 1)
+            self.assertEqual(preference_artifacts[0].target_ref, "run:run_1")
 
             for artifact in plan.artifacts:
                 store.append_artifact(artifact)

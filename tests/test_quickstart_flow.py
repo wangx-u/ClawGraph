@@ -179,6 +179,45 @@ class QuickstartFlowTest(unittest.TestCase):
             self.assertEqual(payload[1]["session_id"], first["session_id"])
             self.assertTrue(payload[0]["builders"][0]["ready"])
 
+    def test_list_readiness_reports_recent_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_uri = f"sqlite:///{Path(tempdir) / 'facts.db'}"
+            first = self._run_cli(
+                "bootstrap",
+                "openclaw",
+                "--store",
+                store_uri,
+                "--session-id",
+                "sess_runs",
+                "--run-id",
+                "run_1",
+                "--json",
+            )
+            second = self._run_cli(
+                "bootstrap",
+                "openclaw",
+                "--store",
+                store_uri,
+                "--session-id",
+                "sess_runs_2",
+                "--run-id",
+                "run_2",
+                "--json",
+            )
+
+            payload = self._run_cli(
+                "list",
+                "readiness",
+                "--store",
+                store_uri,
+                "--builder",
+                "preference",
+                "--json",
+            )
+            self.assertEqual(len(payload), 2)
+            self.assertEqual(payload[0]["run_id"], second["run_id"])
+            self.assertEqual(payload[1]["run_id"], first["run_id"])
+
     def test_pipeline_run_dry_run_uses_staged_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             store_uri = f"sqlite:///{Path(tempdir) / 'facts.db'}"

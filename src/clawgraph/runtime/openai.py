@@ -48,6 +48,7 @@ class _WrappedEndpoint:
             parent_id=parent_id,
             extra_headers=kwargs.pop("extra_headers", None) or extra_headers,
         )
+        self.session.last_request_id = merged_headers.get("x-clawgraph-request-id")
         return self.create_callable(*args, extra_headers=merged_headers, **kwargs)
 
 
@@ -150,6 +151,9 @@ class ClawGraphOpenAIClient:
             else None
         )
 
+    def start_new_run(self, run_id: str | None = None) -> str:
+        return self.session.start_new_run(run_id=run_id)
+
     def emit_semantic(
         self,
         *,
@@ -158,6 +162,8 @@ class ClawGraphOpenAIClient:
         fact_ref: str | None = None,
         branch_id: str | None = None,
         request_id: str | None = None,
+        target_request_id: str | None = None,
+        event_request_id: str | None = None,
     ) -> Any:
         if self._semantic_client is None:
             raise ValueError("base_url is required to emit semantic events from the wrapper")
@@ -167,4 +173,6 @@ class ClawGraphOpenAIClient:
             fact_ref=fact_ref,
             branch_id=branch_id,
             request_id=request_id,
+            target_request_id=target_request_id,
+            event_request_id=event_request_id,
         )

@@ -10,13 +10,13 @@ hero:
     alt: ClawGraph logo
   actions:
     - theme: brand
-      text: Start Here
-      link: /guides/start_here
-    - theme: alt
-      text: Quickstart
+      text: Validate Locally
       link: /guides/quickstart
     - theme: alt
-      text: 中文文档
+      text: Connect Runtime
+      link: /guides/openclaw_integration
+    - theme: alt
+      text: 中文入门
       link: /zh-CN/README
 
 features:
@@ -44,78 +44,50 @@ reproducible learning workflows:
 - capture real agent traffic once
 - inspect what happened before training
 - attach supervision without mutating history
-- export training data only when a session is ready
+- export training data only when a run is ready
 
-## New here?
+## Start with one job
 
-Start with the shortest useful path:
+Choose the next action you need, not the whole system.
 
-1. Run [`15-Minute Path`](/guides/fifteen_minute_path) if you want one guided
-   flow from local validation to export.
-2. Run [`Quickstart`](/guides/quickstart) if you only want the shortest first
-   success path.
-3. Read [`OpenClaw Integration`](/guides/openclaw_integration) before wiring a
-   real runtime.
-4. Prefer Chinese docs? Start with [`中文文档`](/zh-CN/README).
+### 1. Validate one local run
 
-## Choose your path
+Use this if you want the fastest proof that ClawGraph works on your machine.
 
-- **I need a first successful run**
-  Start with [`Start Here`](/guides/start_here).
-- **I want one guided path from first run to export**
-  Start with [`15-Minute Path`](/guides/fifteen_minute_path).
-- **I run an OpenClaw-style runtime**
-  Start with [`OpenClaw Integration`](/guides/openclaw_integration).
-- **I need better debugging before training**
-  Start with [`Replay and Debug`](/guides/replay_and_debug).
-- **I need datasets for training**
-  Start with [`Dataset Builders`](/guides/dataset_builders) and
-  [`Export to Async RL`](/guides/export_to_async_rl).
-- **I want the protocol and data model**
-  Start with [`Execution Facts`](/concepts/execution_facts) and
-  [`Artifact Protocol`](/concepts/artifact_protocol).
+- Read [`Quickstart`](/guides/quickstart)
+- Prefer one longer guided path? Use [`15-Minute Path`](/guides/fifteen_minute_path)
+- Prefer runnable repo files? Open [`examples/openclaw_quickstart`](../examples/openclaw_quickstart/README.md)
 
-## Common workflows
+### 2. Connect a real runtime
 
-### Local first run
+Use this if you already run an OpenClaw-style or OpenAI-compatible stack.
 
-- [`Quickstart`](/guides/quickstart)
-- [`User Stories`](/guides/user_stories)
+- Read [`OpenClaw Integration`](/guides/openclaw_integration)
+- Keep capture low-friction with [`Proxy Mode`](/guides/proxy_mode)
+- Need runnable examples? Start with [`examples/openclaw_proxy_minimal`](../examples/openclaw_proxy_minimal/README.md)
 
-### Connect a production runtime
+### 3. Export training data
 
-- [`OpenClaw Integration`](/guides/openclaw_integration)
-- [`Proxy Mode`](/guides/proxy_mode)
-- [`Semantic Mode`](/guides/semantic_mode)
+Use this if you already have captured runs and need files for SFT, preference,
+or RL workflows.
 
-### Export to training systems
+- Read [`Dataset Builders`](/guides/dataset_builders)
+- Use [`Export to Async RL`](/guides/export_to_async_rl) for the handoff boundary
+- Prefer runnable repo files? Open [`examples/export_to_async_rl`](../examples/export_to_async_rl/README.md)
 
-- [`Dataset Builders`](/guides/dataset_builders)
-- [`Export to Async RL`](/guides/export_to_async_rl)
-- [`CLI Reference`](/reference/cli_reference)
+If you want a gentler decision page before committing to one path, use
+[`Start Here`](/guides/start_here). Prefer Chinese onboarding? Start with
+[`中文入门文档`](/zh-CN/README).
 
-## Docs map
+## Use these after the first run
 
-- **Start here**
-  [`Start Here`](/guides/start_here), [`Quickstart`](/guides/quickstart)
-- **Run one guided flow**
-  [`15-Minute Path`](/guides/fifteen_minute_path)
-- **Browse examples**
-  [`Examples`](/guides/examples)
-- **Learn the model**
-  [`What is ClawGraph`](/overview/what_is_clawgraph),
-  [`Architecture`](/overview/architecture),
-  [`Why Not Tracing`](/overview/why_not_tracing)
-- **Work with real runs**
-  [`Replay and Debug`](/guides/replay_and_debug),
-  [`User Stories`](/guides/user_stories)
-- **Build and export supervision**
-  [`Dataset Builders`](/guides/dataset_builders),
-  [`Custom Artifacts and Builders`](/guides/custom_artifacts_and_builders)
+- [`Replay and Debug`](/guides/replay_and_debug) when you need to answer what happened before training
+- [`Workflow Overview`](/guides/workflow_overview) when deciding how much should stay manual
+- [`User Stories`](/guides/user_stories) when mapping ClawGraph to runtime, RL, evaluation, or platform work
+- [`Examples`](/guides/examples) when you prefer runnable artifacts over prose
 
-## Good next pages
+## Reference
 
-- If you want one guided path, read [`15-Minute Path`](/guides/fifteen_minute_path).
-- If you want the fastest local validation, read [`Quickstart`](/guides/quickstart).
-- If you already have a runtime, read [`OpenClaw Integration`](/guides/openclaw_integration).
-- If you need training outputs, read [`Dataset Builders`](/guides/dataset_builders).
+- [`CLI Reference`](/reference/cli_reference) for command flags and target shortcuts
+- [`Execution Facts`](/concepts/execution_facts) and [`Artifact Protocol`](/concepts/artifact_protocol) for the data model
+- [`What is ClawGraph`](/overview/what_is_clawgraph), [`Architecture`](/overview/architecture), [`Roadmap`](/overview/roadmap), and [`Why Not Tracing`](/overview/why_not_tracing) for system design

@@ -6,7 +6,7 @@ This guide is Step 1 of the [15-Minute Path](./fifteen_minute_path.md).
 
 By the end of this guide you will have:
 
-- one complete OpenClaw-style session
+- one complete OpenClaw-style session with one run
 - one declared retry branch
 - inspectable artifacts
 - a dry-run export preview
@@ -27,15 +27,20 @@ clawgraph bootstrap openclaw --store sqlite:///clawgraph.db
 
 This writes a complete session with:
 
+- one run
 - request and response facts
 - a declared retry branch
 - a score artifact
 - a preference artifact
 
+If you prefer runnable repository files instead of a bootstrap command, use
+[`examples/openclaw_quickstart`](../../examples/openclaw_quickstart/README.md).
+
 ## 3. Inspect what was created
 
 ```bash
 clawgraph list sessions
+clawgraph list runs --session latest
 clawgraph list requests --session latest
 clawgraph inspect request --session latest --request-id latest
 clawgraph replay --session latest
@@ -80,6 +85,7 @@ For real runtime capture, the default path is now:
 ```bash
 clawgraph proxy ...
 clawgraph inspect session --session latest
+clawgraph list runs --session latest
 clawgraph replay --session latest
 clawgraph pipeline run --session latest --builder preference --dry-run
 ```
@@ -93,3 +99,4 @@ Next:
 - read [OpenClaw Integration](./openclaw_integration.md) before wiring a real runtime
 - read [Workflow Overview](./workflow_overview.md) for manual versus automated paths
 - read [Dataset Builders](./dataset_builders.md) before exporting larger batches
+- use [`examples/openclaw_quickstart`](../../examples/openclaw_quickstart/README.md) if you want the same flow as runnable repository files

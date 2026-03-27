@@ -7,10 +7,11 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from clawgraph.protocol.models import ArtifactRecord, FactEvent
+from clawgraph.protocol.validation import validate_artifact_record, validate_fact_event
 
 
 def parse_store_uri(store_uri: str) -> Path:
@@ -26,8 +27,14 @@ def parse_store_uri(store_uri: str) -> Path:
 
     if path.startswith("//"):
         resolved = Path(path[1:])
+    elif path.startswith("/"):
+        parts = Path(path).parts[1:]
+        if len(parts) <= 1:
+            resolved = Path(*parts)
+        else:
+            resolved = Path(path)
     else:
-        resolved = Path(path.lstrip("/"))
+        resolved = Path(path)
 
     return resolved.expanduser()
 
@@ -42,12 +49,16 @@ class SQLiteFactStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=5.0)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
     def _init_db(self) -> None:
         with closing(self._connect()) as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            connection.execute("PRAGMA busy_timeout = 5000")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS facts (
@@ -98,6 +109,12 @@ class SQLiteFactStore:
                     ON artifacts(session_id, created_at, seq);
                 CREATE INDEX IF NOT EXISTS idx_artifacts_target_created
                     ON artifacts(target_ref, created_at, seq);
+
+                CREATE TABLE IF NOT EXISTS session_owners (
+                    session_id TEXT PRIMARY KEY,
+                    owner_key TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column(connection, "facts", "request_id", "TEXT")
@@ -136,8 +153,39 @@ class SQLiteFactStore:
     def append_fact(self, fact: FactEvent) -> None:
         """Persist a fact event."""
 
+        self.append_facts([fact])
+
+    def append_facts(self, facts: Iterable[FactEvent]) -> None:
+        """Persist multiple fact events in a single transaction."""
+
+        validated_facts = list(facts)
+        for fact in validated_facts:
+            validate_fact_event(fact)
+        fact_rows = [
+            (
+                fact.fact_id,
+                fact.schema_version,
+                fact.run_id,
+                fact.session_id,
+                fact.request_id,
+                fact.user_id,
+                fact.thread_id,
+                fact.task_id,
+                fact.parent_ref,
+                fact.branch_id,
+                fact.timestamp.isoformat(),
+                fact.actor,
+                fact.kind,
+                json.dumps(fact.payload, ensure_ascii=True, sort_keys=True),
+                json.dumps(fact.metadata, ensure_ascii=True, sort_keys=True),
+            )
+            for fact in validated_facts
+        ]
+        if not fact_rows:
+            return
+
         with closing(self._connect()) as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 INSERT INTO facts (
                     fact_id, schema_version, run_id, session_id, request_id,
@@ -146,23 +194,7 @@ class SQLiteFactStore:
                     payload_json, metadata_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    fact.fact_id,
-                    fact.schema_version,
-                    fact.run_id,
-                    fact.session_id,
-                    fact.request_id,
-                    fact.user_id,
-                    fact.thread_id,
-                    fact.task_id,
-                    fact.parent_ref,
-                    fact.branch_id,
-                    fact.timestamp.isoformat(),
-                    fact.actor,
-                    fact.kind,
-                    json.dumps(fact.payload, ensure_ascii=True, sort_keys=True),
-                    json.dumps(fact.metadata, ensure_ascii=True, sort_keys=True),
-                ),
+                fact_rows,
             )
             connection.commit()
 
@@ -235,19 +267,63 @@ class SQLiteFactStore:
             return None
         return str(row["request_id"])
 
+    def claim_session_owner(self, *, session_id: str, owner_key: str) -> str | None:
+        """Claim a session for one owner key or return the conflicting existing owner."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT owner_key
+                FROM session_owners
+                WHERE session_id = ?
+                """,
+                [session_id],
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO session_owners(session_id, owner_key, first_seen_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    [session_id, owner_key, datetime.now().isoformat()],
+                )
+                connection.commit()
+                return None
+            existing_owner = str(row["owner_key"])
+            if existing_owner == owner_key:
+                return None
+            return existing_owner
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        """Return the current owner key for a session, if claimed."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT owner_key
+                FROM session_owners
+                WHERE session_id = ?
+                """,
+                [session_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["owner_key"])
+
     def append_artifact(self, artifact: ArtifactRecord) -> None:
         """Persist an external supervision artifact."""
 
-        created_at = artifact.created_at or datetime.now().astimezone()
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """
-                INSERT INTO artifacts (
-                    artifact_id, schema_version, artifact_type, target_ref, producer,
-                    version, session_id, run_id, created_at, status, confidence,
-                    supersedes_artifact_id, payload_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+        self.append_artifacts([artifact])
+
+    def append_artifacts(self, artifacts: Iterable[ArtifactRecord]) -> None:
+        """Persist multiple artifacts in a single transaction."""
+
+        validated_artifacts = list(artifacts)
+        artifact_rows = []
+        for artifact in validated_artifacts:
+            validate_artifact_record(artifact)
+            created_at = artifact.created_at or datetime.now().astimezone()
+            artifact_rows.append(
                 (
                     artifact.artifact_id,
                     artifact.schema_version,
@@ -263,7 +339,21 @@ class SQLiteFactStore:
                     artifact.supersedes_artifact_id,
                     json.dumps(artifact.payload, ensure_ascii=True, sort_keys=True),
                     json.dumps(artifact.metadata, ensure_ascii=True, sort_keys=True),
-                ),
+                )
+            )
+        if not artifact_rows:
+            return
+
+        with closing(self._connect()) as connection:
+            connection.executemany(
+                """
+                INSERT INTO artifacts (
+                    artifact_id, schema_version, artifact_type, target_ref, producer,
+                    version, session_id, run_id, created_at, status, confidence,
+                    supersedes_artifact_id, payload_json, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                artifact_rows,
             )
             connection.commit()
 
@@ -344,6 +434,103 @@ class SQLiteFactStore:
             return None
         return str(row["session_id"])
 
+    def get_latest_run_id(self, *, session_id: str | None = None) -> str | None:
+        """Return the most recently seen run id, optionally scoped to a session."""
+
+        query = "SELECT run_id FROM facts"
+        values: list[str] = []
+        if session_id is not None:
+            query += " WHERE session_id = ?"
+            values.append(session_id)
+        query += " ORDER BY timestamp DESC, seq DESC LIMIT 1"
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(query, values).fetchone()
+        if row is None:
+            return None
+        return str(row["run_id"])
+
+    def get_session_id_for_run(self, run_id: str) -> str | None:
+        """Return the session id for one run id."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT session_id
+                FROM facts
+                WHERE run_id = ?
+                ORDER BY timestamp ASC, seq ASC
+                LIMIT 1
+                """,
+                [run_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["session_id"])
+
+    def get_fact(self, fact_id: str) -> FactEvent | None:
+        """Return one fact by fact id."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM facts
+                WHERE fact_id = ?
+                LIMIT 1
+                """,
+                [fact_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_fact(row)
+
+    def get_request_fact(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        request_id: str,
+    ) -> FactEvent | None:
+        """Return the first request_started fact for one scoped request id."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM facts
+                WHERE session_id = ?
+                  AND run_id = ?
+                  AND request_id = ?
+                  AND kind = 'request_started'
+                ORDER BY timestamp ASC, seq ASC
+                LIMIT 1
+                """,
+                [session_id, run_id, request_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_fact(row)
+
+    def iter_fact_body_refs(self) -> Iterable[tuple[str, dict[str, Any]]]:
+        """Iterate fact-level payload sidecar references."""
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT fact_id, payload_json
+                FROM facts
+                WHERE instr(payload_json, '"body_ref"') > 0
+                ORDER BY seq ASC
+                """
+            ).fetchall()
+
+        for row in rows:
+            payload = json.loads(str(row["payload_json"]))
+            body_ref = payload.get("body_ref")
+            if isinstance(body_ref, dict):
+                yield str(row["fact_id"]), body_ref
+
     def iter_sessions(self) -> Iterable[str]:
         """Iterate known session ids in recency order."""
 
@@ -359,6 +546,28 @@ class SQLiteFactStore:
 
         for row in rows:
             yield str(row["session_id"])
+
+    def iter_runs(self, *, session_id: str | None = None) -> Iterable[str]:
+        """Iterate known run ids in recency order, optionally scoped to a session."""
+
+        query = """
+            SELECT run_id, MAX(timestamp) AS latest_timestamp
+            FROM facts
+        """
+        values: list[str] = []
+        if session_id is not None:
+            query += " WHERE session_id = ?"
+            values.append(session_id)
+        query += """
+            GROUP BY run_id
+            ORDER BY latest_timestamp DESC
+        """
+
+        with closing(self._connect()) as connection:
+            rows = connection.execute(query, values).fetchall()
+
+        for row in rows:
+            yield str(row["run_id"])
 
     @staticmethod
     def _row_to_fact(row: sqlite3.Row) -> FactEvent:

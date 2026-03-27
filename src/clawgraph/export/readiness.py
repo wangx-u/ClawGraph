@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from clawgraph.export.dataset import SUPPORTED_BUILDERS, build_records_for_builder
+from clawgraph.builders import BuildContext, get_dataset_builder, list_dataset_builders
+from clawgraph.export.dataset import build_records_for_builder
 from clawgraph.graph import build_request_span_summaries
 from clawgraph.protocol.models import ArtifactRecord, FactEvent
 
@@ -28,6 +29,7 @@ class DatasetReadinessSummary:
     """Readiness summary across supported builders."""
 
     session_id: str
+    run_id: str | None
     request_spans: int
     active_artifacts: int
     builders: list[BuilderReadiness]
@@ -35,6 +37,7 @@ class DatasetReadinessSummary:
     def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
+            "run_id": self.run_id,
             "request_spans": self.request_spans,
             "active_artifacts": self.active_artifacts,
             "builders": [builder.to_dict() for builder in self.builders],
@@ -52,26 +55,32 @@ def build_dataset_readiness_summary(
     if not facts:
         raise ValueError("no facts found")
 
-    builders = [builder] if builder is not None else list(SUPPORTED_BUILDERS)
+    builders = [builder] if builder is not None else list(list_dataset_builders())
     readiness_items: list[BuilderReadiness] = []
+    run_ids = sorted({fact.run_id for fact in facts})
+    context = BuildContext(
+        session_id=facts[0].session_id,
+        run_id=run_ids[0] if len(run_ids) == 1 else None,
+    )
     for builder_name in builders:
-        normalized = "binary_rl" if builder_name == "binary-rl" else builder_name
-        if normalized not in SUPPORTED_BUILDERS:
-            raise ValueError(f"unsupported builder: {builder_name}")
+        builder_impl = get_dataset_builder(builder_name)
+        canonical_name = builder_impl.name
         records = build_records_for_builder(
-            builder=normalized,
+            builder=canonical_name,
             facts=facts,
             artifacts=artifacts,
         )
-        blockers = _blockers_for_builder(
-            builder=normalized,
-            facts=facts,
-            artifacts=artifacts,
-            records=records,
+        blockers = list(
+            builder_impl.blockers(
+                facts=facts,
+                artifacts=artifacts,
+                records=records,
+                context=context,
+            )
         )
         readiness_items.append(
             BuilderReadiness(
-                builder=normalized,
+                builder=canonical_name,
                 ready=not blockers and len(records) > 0,
                 predicted_records=len(records),
                 blockers=blockers,
@@ -81,6 +90,7 @@ def build_dataset_readiness_summary(
     active_artifacts = [artifact for artifact in artifacts if artifact.status == "active"]
     return DatasetReadinessSummary(
         session_id=facts[0].session_id,
+        run_id=run_ids[0] if len(run_ids) == 1 else None,
         request_spans=len(build_request_span_summaries(facts)),
         active_artifacts=len(active_artifacts),
         builders=readiness_items,
@@ -92,6 +102,7 @@ def render_dataset_readiness(summary: DatasetReadinessSummary) -> str:
 
     lines = [
         f"Session: {summary.session_id}",
+        f"Run: {summary.run_id or '<multiple>'}",
         f"Request spans: {summary.request_spans}",
         f"Active artifacts: {summary.active_artifacts}",
         "",
@@ -104,41 +115,3 @@ def render_dataset_readiness(summary: DatasetReadinessSummary) -> str:
             f"predicted_records={builder.predicted_records} blockers={blocker_text}"
         )
     return "\n".join(lines)
-
-
-def _blockers_for_builder(
-    *,
-    builder: str,
-    facts: list[FactEvent],
-    artifacts: list[ArtifactRecord],
-    records: list[dict[str, Any]],
-) -> list[str]:
-    if builder == "facts":
-        return [] if facts else ["no facts found"]
-    if builder == "sft":
-        return [] if records else ["no successful model response pairs found for SFT"]
-    if builder == "preference":
-        active_preference_artifacts = [
-            artifact
-            for artifact in artifacts
-            if artifact.status == "active"
-            and artifact.artifact_type in {"ranking", "preference", "preference_pair", "chosen_rejected"}
-        ]
-        if records:
-            return []
-        if active_preference_artifacts:
-            return ["active preference artifacts did not resolve to known branches"]
-        return ["no active preference artifacts or comparable related branch pairs found"]
-    if builder == "binary_rl":
-        active_binary_rl_artifacts = [
-            artifact
-            for artifact in artifacts
-            if artifact.status == "active"
-            and artifact.artifact_type in {"score", "reward", "binary_label", "label"}
-        ]
-        if records:
-            return []
-        if active_binary_rl_artifacts:
-            return ["active binary RL artifacts did not contain numeric rewards"]
-        return ["no active score/reward artifacts found for binary RL"]
-    raise ValueError(f"unsupported builder: {builder}")

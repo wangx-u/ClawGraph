@@ -2,7 +2,7 @@
 
 ClawGraph 的导出流程分两步：
 
-1. 先确认 session 是否具备导出条件
+1. 先确认你要导出的 run 是否具备导出条件
 2. 再按 builder 导出训练数据
 
 ## 先看 readiness
@@ -18,6 +18,12 @@ clawgraph readiness --session latest --builder binary_rl
 - 是否可导出
 - 缺什么条件
 - 预计会产出多少条记录
+
+先记住默认作用域：
+
+- inspect / replay 先按 session 看全局
+- readiness / export 默认落在这个 session 里的最新 run
+- 如果一个 session 里有多个 run，要显式传 `--run-id`
 
 ## 常见 builder
 
@@ -79,5 +85,9 @@ clawgraph list requests --session latest
   看 [15 分钟路径](./fifteen_minute_path.md)
 - 想接真实 runtime：
   看 [接入说明](./openclaw_integration.md)
+- 想看常用命令和 target shortcut：
+  看 [CLI 参考](./cli_reference.md)
+- 想直接复制 runnable example：
+  看 [Examples](./examples.md)
 - 想看更完整的英文 builder 说明：
   看 [Dataset Builders](../guides/dataset_builders.md)

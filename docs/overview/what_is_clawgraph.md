@@ -6,6 +6,13 @@ It captures immutable execution facts from real runtime execution, derives
 branch-aware graph views, attaches typed supervision artifacts, and exports
 reusable datasets for downstream training systems.
 
+In ClawGraph v1:
+
+- a `session` is the durable container for related user or application activity
+- a `run` is one execution episode inside a session
+- requests and branches live inside a run
+- built-in training exports are run-oriented even when you navigate from a session
+
 In practice, one captured run can support:
 
 - replay and debugging

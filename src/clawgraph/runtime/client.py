@@ -33,22 +33,32 @@ class ClawGraphSession:
     user_id: str | None = None
     thread_id: str | None = None
     task_id: str | None = None
+    last_request_id: str | None = None
 
     def ensure_identity(self) -> tuple[str, str]:
         if not self.session_id:
             self.session_id = f"sess_{uuid4().hex}"
         if not self.run_id:
-            self.run_id = self.session_id
+            self.run_id = self.make_run_id()
         return self.session_id, self.run_id
+
+    def make_run_id(self) -> str:
+        return f"run_{uuid4().hex}"
 
     def make_request_id(self) -> str:
         return f"req_{uuid4().hex}"
+
+    def start_new_run(self, run_id: str | None = None) -> str:
+        if not self.session_id:
+            self.session_id = f"sess_{uuid4().hex}"
+        self.run_id = run_id or self.make_run_id()
+        self.last_request_id = None
+        return self.run_id
 
     def absorb_explicit_headers(self, headers: dict[str, str] | None) -> None:
         if not headers:
             return
 
-        previous_session_id = self.session_id
         explicit_session_id = headers.get("x-clawgraph-session-id")
         explicit_run_id = headers.get("x-clawgraph-run-id")
         explicit_user_id = headers.get("x-clawgraph-user-id")
@@ -56,12 +66,14 @@ class ClawGraphSession:
         explicit_task_id = headers.get("x-clawgraph-task-id")
 
         if explicit_session_id:
+            session_changed = explicit_session_id != self.session_id
             self.session_id = explicit_session_id
-            if explicit_run_id is None and (
-                self.run_id is None or self.run_id == previous_session_id
-            ):
-                self.run_id = explicit_session_id
+            if session_changed and explicit_run_id is None:
+                self.run_id = None
+                self.last_request_id = None
         if explicit_run_id:
+            if explicit_run_id != self.run_id:
+                self.last_request_id = None
             self.run_id = explicit_run_id
         if explicit_user_id:
             self.user_id = explicit_user_id
@@ -139,6 +151,9 @@ class ClawGraphRuntimeClient:
         self._cookie_jar = CookieJar()
         self._opener = build_opener(HTTPCookieProcessor(self._cookie_jar))
 
+    def start_new_run(self, run_id: str | None = None) -> str:
+        return self.session.start_new_run(run_id=run_id)
+
     def post_json(
         self,
         path: str,
@@ -168,6 +183,8 @@ class ClawGraphRuntimeClient:
             with self._opener.open(request, timeout=self.timeout_seconds) as response:
                 response_body = response.read()
                 self.session.absorb_response_headers(response.headers)
+                if _normalize_path(path) != "/v1/semantic-events":
+                    self.session.last_request_id = request_id_value
                 return ClawGraphRuntimeResponse(
                     status_code=response.getcode(),
                     headers=dict(response.headers.items()),
@@ -176,6 +193,8 @@ class ClawGraphRuntimeClient:
         except HTTPError as exc:
             response_body = exc.read()
             self.session.absorb_response_headers(exc.headers)
+            if _normalize_path(path) != "/v1/semantic-events":
+                self.session.last_request_id = request_id_value
             return ClawGraphRuntimeResponse(
                 status_code=exc.code,
                 headers=dict(exc.headers.items()),
@@ -239,10 +258,24 @@ class ClawGraphRuntimeClient:
         fact_ref: str | None = None,
         branch_id: str | None = None,
         request_id: str | None = None,
+        target_request_id: str | None = None,
+        event_request_id: str | None = None,
     ) -> ClawGraphRuntimeResponse:
+        semantic_payload = dict(payload)
+        resolved_target_request_id = (
+            target_request_id
+            or request_id
+            or semantic_payload.get("request_id")
+            or self.session.last_request_id
+        )
+        if isinstance(resolved_target_request_id, str) and resolved_target_request_id:
+            semantic_payload.setdefault("request_id", resolved_target_request_id)
+        if branch_id is not None:
+            semantic_payload.setdefault("branch_id", branch_id)
+
         body: dict[str, Any] = {
             "kind": kind,
-            "payload": payload,
+            "payload": semantic_payload,
         }
         if fact_ref is not None:
             body["fact_ref"] = fact_ref
@@ -251,5 +284,5 @@ class ClawGraphRuntimeClient:
         return self.post_json(
             "/v1/semantic-events",
             body,
-            request_id=request_id,
+            request_id=event_request_id or self.session.make_request_id(),
         )

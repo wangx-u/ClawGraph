@@ -29,14 +29,22 @@ clawgraph pipeline run --session latest --builder preference --dry-run
 
 - proxy capture
 - 自动生成 `session_id / run_id / request_id`
+- 对浏览器风格客户端自动复用 session 和当前 run
 - replay 和 inspect
-- 对最新 session 做 pipeline 预览
+- 对最新捕获 run 做 pipeline 预览
 
 这一层仍然是可选增强：
 
 - 通过 header 提供稳定 id
 - semantic event
 - 自定义 artifact
+
+推荐心智模型：
+
+- `session` 是先拿来定位和排查的容器
+- `run` 是容器里一次执行回合
+- inspect 和 replay 默认先看整个 session
+- readiness、artifact bootstrap、pipeline、export 默认落在最新 run
 
 ## 2. 半自动流水线
 
@@ -59,6 +67,7 @@ clawgraph pipeline run --session latest --builder preference --out out/preferenc
 - 内置 supervision bootstrap
 - builder-specific readiness
 - 数据导出和 manifest
+- `clawgraph list readiness` 会按最近 run 扫描
 
 仍然需要人工决定：
 
@@ -100,3 +109,5 @@ clawgraph export dataset --builder binary_rl --session latest --out out/binary_r
 - [接入说明](./openclaw_integration.md)
 - [15 分钟路径](./fifteen_minute_path.md)
 - [数据导出](./dataset_builders.md)
+- [Replay 与调试](./replay_and_debug.md)
+- [CLI 参考](./cli_reference.md)

@@ -9,6 +9,7 @@ from clawgraph.graph import (
     build_branch_inspect_summaries,
     build_comparable_branch_pairs,
     build_request_span_summaries,
+    partition_facts_by_run,
 )
 from clawgraph.protocol.factories import new_artifact_record
 from clawgraph.protocol.models import ArtifactRecord, FactEvent
@@ -72,12 +73,53 @@ def plan_artifact_bootstrap(
 
     normalized_template = _canonical_template(template)
     session_id = facts[0].session_id
-    run_ids = sorted({fact.run_id for fact in facts})
-    run_id = run_ids[0] if len(run_ids) == 1 else None
+    artifacts: list[ArtifactRecord] = []
+    blockers: list[str] = []
+    run_partitions = partition_facts_by_run(facts)
+    multi_run = len(run_partitions) > 1
+
+    for run_id, run_facts in run_partitions:
+        run_artifacts, run_blockers = _plan_artifact_bootstrap_for_run(
+            template=normalized_template,
+            facts=run_facts,
+            producer=producer,
+            version=version,
+            session_id=session_id,
+            run_id=run_id,
+            status=status,
+        )
+        artifacts.extend(run_artifacts)
+        if multi_run:
+            blockers.extend(f"run {run_id}: {blocker}" for blocker in run_blockers)
+        else:
+            blockers.extend(run_blockers)
+
+    return ArtifactBootstrapPlan(
+        template=normalized_template,
+        session_id=session_id,
+        producer=producer,
+        version=version,
+        blockers=_dedupe(blockers),
+        artifacts=artifacts,
+    )
+
+
+def _plan_artifact_bootstrap_for_run(
+    *,
+    template: str,
+    facts: list[FactEvent],
+    producer: str,
+    version: str | None,
+    session_id: str,
+    run_id: str,
+    status: str,
+) -> tuple[list[ArtifactRecord], list[str]]:
+    """Build bootstrap artifacts for one run."""
+
     artifacts: list[ArtifactRecord] = []
     blockers: list[str] = []
 
-    if normalized_template in {"request-outcome-scores", "openclaw-defaults"}:
+    if template in {"request-outcome-scores", "openclaw-defaults"}:
         request_artifacts = _request_outcome_score_artifacts(
             facts=facts,
             producer=producer,
@@ -88,10 +130,10 @@ def plan_artifact_bootstrap(
         )
         if request_artifacts:
             artifacts.extend(request_artifacts)
-        elif normalized_template == "request-outcome-scores":
+        elif template == "request-outcome-scores":
             blockers.append("no closed requests with response or error facts were found")
 
-    if normalized_template in {"branch-outcome-preference", "openclaw-defaults"}:
+    if template in {"branch-outcome-preference", "openclaw-defaults"}:
         branch_artifacts = _branch_outcome_preference_artifacts(
             facts=facts,
             producer=producer,
@@ -102,10 +144,10 @@ def plan_artifact_bootstrap(
         )
         if branch_artifacts:
             artifacts.extend(branch_artifacts)
-        elif normalized_template == "branch-outcome-preference":
+        elif template == "branch-outcome-preference":
             blockers.append("no comparable succeeded-versus-failed branches were found")
 
-    if normalized_template == "openclaw-defaults" and not artifacts:
+    if template == "openclaw-defaults" and not artifacts:
         blockers.extend(
             [
                 "no closed requests with response or error facts were found",
@@ -113,14 +155,7 @@ def plan_artifact_bootstrap(
             ]
         )
 
-    return ArtifactBootstrapPlan(
-        template=normalized_template,
-        session_id=session_id,
-        producer=producer,
-        version=version,
-        blockers=_dedupe(blockers),
-        artifacts=artifacts,
-    )
+    return artifacts, blockers
 
 
 def _request_outcome_score_artifacts(
@@ -179,7 +214,7 @@ def _branch_outcome_preference_artifacts(
         artifacts.append(
             new_artifact_record(
                 artifact_type="preference",
-                target_ref=f"session:{session_id}",
+                target_ref=f"run:{run_id}",
                 producer=producer,
                 version=version,
                 payload={

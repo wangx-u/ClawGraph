@@ -21,8 +21,15 @@ Current export behavior:
 
 - every builder writes `*.jsonl`
 - every export also writes `*.jsonl.manifest.json`
-- each record includes a minimal `lineage` block
+- each record is self-contained and includes prompt, trajectory or completion, and supervision payloads
+- each record also includes a `lineage` block for traceability
 - `clawgraph export dataset --dry-run` previews record counts, blockers, and manifest metadata before writing files
+- if one session contains multiple runs, export-oriented commands default to the latest run unless `--run-id` is set explicitly
+
+Scope reminder:
+
+- inspect and replay workflows stay session-oriented first
+- readiness, pipeline, artifact bootstrap, and export workflows are run-oriented by default
 
 Readiness uses the same builder logic as export:
 
@@ -32,9 +39,9 @@ Readiness uses the same builder logic as export:
 
 Current builder inputs:
 
-- `sft`: successful request/response pairs
-- `preference`: active preference artifacts, ranking artifacts, or fallback branch-outcome heuristics
-- `binary_rl`: active score/reward/label artifacts
+- `sft`: successful request/response pairs with normalized message history
+- `preference`: active preference artifacts, ranking artifacts, or fallback branch-outcome heuristics, exported with branch trajectories
+- `binary_rl`: active score/reward/label artifacts, exported with resolved request or branch context when available
 
 Built-in supervision bootstrap:
 
@@ -62,10 +69,14 @@ Use this order:
 3. dry-run the export
 4. write the JSONL and manifest
 
+If you prefer runnable repository files for this flow, use
+[`examples/export_to_async_rl`](../../examples/export_to_async_rl/README.md).
+
 Next:
 
 - return to [15-Minute Path](./fifteen_minute_path.md) for the full end-to-end guide
 - read [Export to Async RL](./export_to_async_rl.md) for downstream handoff
+- use [`examples/export_to_async_rl`](../../examples/export_to_async_rl/README.md) for a runnable repository walkthrough
 
 Future families:
 

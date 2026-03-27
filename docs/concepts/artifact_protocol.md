@@ -18,6 +18,7 @@ Artifacts exist so supervision can evolve without mutating historical facts.
 Common artifact workflows include:
 
 - append a score to `session:<id>`
+- append a run-level reward or preference target to `run:<id>`
 - attach a critique to `fact:<id>`
 - attach a ranking to `branch:<id>`
 - attach a distillation target to `fact:<id>` or `branch:<id>`

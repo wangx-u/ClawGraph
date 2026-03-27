@@ -25,9 +25,12 @@ model_endpoint: http://localhost:8080/v1/chat/completions
 tool_endpoint: http://localhost:8080/tools
 headers:
   x-clawgraph-session-id: sess_openclaw_1
-  x-clawgraph-run-id: sess_openclaw_1
+  x-clawgraph-run-id: run_openclaw_1
   x-clawgraph-user-id: user_seed
 ```
+
+If you do not need stable ids yet, you can also let the proxy assign them. This
+example keeps them explicit only to make the walkthrough deterministic.
 
 ## 3. Append one semantic event
 
@@ -42,7 +45,7 @@ curl -X POST http://localhost:8080/v1/semantic-events \
 ```bash
 clawgraph artifact append \
   --session-id sess_openclaw_1 \
-  --run-id sess_openclaw_1 \
+  --run-id run_openclaw_1 \
   --type score \
   --target-ref latest-response \
   --producer judge-v1 \
@@ -50,9 +53,9 @@ clawgraph artifact append \
 
 clawgraph artifact append \
   --session-id sess_openclaw_1 \
-  --run-id sess_openclaw_1 \
+  --run-id run_openclaw_1 \
   --type preference \
-  --target-ref session:latest \
+  --target-ref run:latest \
   --producer judge-v1 \
   --payload @examples/openclaw_quickstart/preference_payload.json
 ```
@@ -61,6 +64,7 @@ clawgraph artifact append \
 
 ```bash
 clawgraph inspect session --session sess_openclaw_1
+clawgraph list runs --session sess_openclaw_1
 clawgraph list requests --session sess_openclaw_1
 clawgraph inspect request --session sess_openclaw_1 --request-id latest
 clawgraph inspect branch --session sess_openclaw_1

@@ -29,7 +29,9 @@ What ClawGraph now does automatically in this mode:
 
 - generates `session_id`, `run_id`, and `request_id` when they are missing
 - returns them in response headers
-- sets a session cookie so browser-style clients can keep the same session without runtime changes
+- sets session and run cookies so browser-style clients can keep the same session and current run without runtime changes
+- creates a fresh run automatically only when the client is stateless or does not replay the run cookie
+- forwards upstream cookies except the internal ClawGraph identity cookies
 
 For Python runtimes, you can also use the built-in helper instead of wiring
 headers yourself:
@@ -45,12 +47,24 @@ response = client.chat_completions(
 
 client.emit_semantic(
     kind="retry_declared",
-    payload={"branch_id": "br_retry_1", "branch_type": "retry", "status": "succeeded"},
+    payload={"branch_type": "retry", "status": "succeeded"},
+    branch_id="br_retry_1",
 )
 ```
 
-If you want a runnable repository example, use
-[`examples/openclaw_python_helper`](../../examples/openclaw_python_helper/README.md).
+`emit_semantic()` binds to the most recent request in the current run when you
+do not pass an explicit target request id, so the default path stays low-friction.
+If you want a new run boundary without rotating the session, call
+`client.start_new_run()`.
+
+For browser or gateway clients that are only using proxy mode, send
+`x-clawgraph-new-run: 1` on the next proxied request to rotate the run while
+keeping the same session.
+
+If you want a runnable repository example, start with
+[`examples/openclaw_proxy_minimal`](../../examples/openclaw_proxy_minimal/README.md).
+Move to [`examples/openclaw_python_helper`](../../examples/openclaw_python_helper/README.md)
+when you want helper-managed requests and semantic ingress.
 
 If you already use the OpenAI Python SDK shape, use
 [`examples/openclaw_openai_wrapper`](../../examples/openclaw_openai_wrapper/README.md)
@@ -99,10 +113,11 @@ Recommended rollout:
 
 1. Start with `clawgraph bootstrap openclaw` if you need a first-run local baseline.
 2. Move to proxy mode for real runtime traffic and let ClawGraph auto-assign ids first.
-3. Add stable run, request, and user ids only when you need stronger replay grouping across clients.
-4. Add semantic events only for retry, fallback, and routing decisions.
-5. Use `clawgraph pipeline run --session latest --builder preference --dry-run` before hand-authored artifacts.
-6. Prefer declared branches over inferred branches for training-critical flows.
+3. Inspect the session first, then pick a run with `clawgraph list runs --session latest` when you need run-specific export.
+4. Add stable run, request, and user ids only when you need stronger replay grouping across clients.
+5. Add semantic events only for retry, fallback, and routing decisions.
+6. Use `clawgraph pipeline run --session latest --builder preference --dry-run` before hand-authored artifacts.
+7. Prefer declared branches over inferred branches for training-critical flows.
 
 Next:
 

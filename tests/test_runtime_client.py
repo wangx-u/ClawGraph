@@ -66,6 +66,20 @@ class RuntimeClientIntegrationTest(unittest.TestCase):
         self.assertEqual(session.run_id, "run_explicit")
         self.assertEqual(session.user_id, "user_explicit")
 
+    def test_session_can_start_new_run_without_rotating_session(self) -> None:
+        session = ClawGraphSession()
+
+        first_headers = session.request_headers()
+        first_session_id = first_headers["x-clawgraph-session-id"]
+        first_run_id = first_headers["x-clawgraph-run-id"]
+
+        second_run_id = session.start_new_run()
+        second_headers = session.request_headers()
+
+        self.assertEqual(second_headers["x-clawgraph-session-id"], first_session_id)
+        self.assertEqual(second_headers["x-clawgraph-run-id"], second_run_id)
+        self.assertNotEqual(second_run_id, first_run_id)
+
     def test_runtime_client_reuses_proxy_assigned_session_and_emits_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = Path(tempdir) / "facts.db"
@@ -101,16 +115,21 @@ class RuntimeClientIntegrationTest(unittest.TestCase):
 
                 self.assertEqual(first.status_code, 200)
                 self.assertEqual(second.status_code, 200)
-                self.assertEqual(client.session.session_id, client.session.run_id)
                 self.assertIsNotNone(client.session.session_id)
+                self.assertIsNotNone(client.session.run_id)
+                self.assertNotEqual(client.session.session_id, client.session.run_id)
+                self.assertEqual(
+                    first.headers.get("x-clawgraph-run-id"),
+                    second.headers.get("x-clawgraph-run-id"),
+                )
 
                 semantic = client.emit_semantic(
                     kind="retry_declared",
                     payload={
-                        "branch_id": "br_retry_runtime_client_1",
                         "branch_type": "retry",
                         "status": "succeeded",
                     },
+                    branch_id="br_retry_runtime_client_1",
                 )
                 self.assertEqual(semantic.status_code, 202)
 
@@ -124,6 +143,18 @@ class RuntimeClientIntegrationTest(unittest.TestCase):
                 self.assertEqual(len(response_finished), 2)
                 self.assertEqual(len(semantic_facts), 1)
                 self.assertTrue(all(fact.run_id == client.session.run_id for fact in facts))
+                self.assertEqual(
+                    semantic_facts[0].payload["payload"]["request_id"],
+                    second.headers["x-clawgraph-request-id"],
+                )
+                self.assertEqual(
+                    semantic_facts[0].payload["payload"]["branch_id"],
+                    "br_retry_runtime_client_1",
+                )
+                self.assertNotEqual(
+                    semantic_facts[0].request_id,
+                    second.headers["x-clawgraph-request-id"],
+                )
             finally:
                 proxy.shutdown()
                 upstream.shutdown()

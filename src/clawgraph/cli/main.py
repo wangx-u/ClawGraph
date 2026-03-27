@@ -30,6 +30,8 @@ from clawgraph.graph import (
 )
 from clawgraph.protocol.factories import new_artifact_record, new_semantic_event_fact
 from clawgraph.proxy import ProxyConfig, run_proxy_server
+from clawgraph.proxy.payload_store import LocalPayloadStore
+from clawgraph.query import ClawGraphQueryService
 from clawgraph.store import SQLiteFactStore
 
 
@@ -40,6 +42,16 @@ def _infer_session_id_from_target_ref(target_ref: str) -> str | None:
     if target_ref.startswith("session:"):
         return target_ref.split(":", 1)[1]
     return None
+
+
+def _infer_run_id_from_target_ref(target_ref: str) -> str | None:
+    if target_ref.startswith("run:"):
+        return target_ref.split(":", 1)[1]
+    return None
+
+
+def _resolve_session_id_for_run(*, store: SQLiteFactStore, run_id: str) -> str | None:
+    return ClawGraphQueryService(store=store).resolve_session_id(run_id=run_id)
 
 
 def _load_json_argument(raw_value: str, *, label: str) -> dict:
@@ -71,6 +83,18 @@ def _resolve_target_ref(
             raise ValueError("no sessions found in store")
         return f"session:{session_id}", session_id
 
+    if target_ref == "run:latest":
+        effective_run_id = _resolve_scope_run_id(
+            store=store,
+            session_value=session_value,
+            run_value=run_value,
+            default_latest_run=True,
+        )
+        if effective_run_id is None:
+            raise ValueError("no runs found in scope")
+        session_id = _resolve_session_id_for_run(store=store, run_id=effective_run_id)
+        return f"run:{effective_run_id}", session_id
+
     if target_ref in {
         "latest-response",
         "latest-model-response",
@@ -83,7 +107,13 @@ def _resolve_target_ref(
             session_value=session_value,
             run_id=run_value,
         )
-        facts = store.list_facts(session_id=session_id, run_id=run_value)
+        effective_run_id = _resolve_scope_run_id(
+            store=store,
+            session_value=session_value,
+            run_value=run_value,
+            default_latest_run=True,
+        )
+        facts = store.list_facts(session_id=session_id, run_id=effective_run_id)
         if not facts:
             raise ValueError("no facts found in scope")
         if target_ref in {"latest-response", "latest-model-response", "latest-tool-response"}:
@@ -118,6 +148,13 @@ def _resolve_target_ref(
         if session_id is None:
             raise ValueError("no sessions found in store")
         return f"session:{session_id}", session_id
+
+    if target_ref.startswith("run:"):
+        session_id = _resolve_session_id_for_run(
+            store=store,
+            run_id=target_ref.split(":", 1)[1],
+        )
+        return target_ref, session_id
     return target_ref, session_value
 
 
@@ -127,11 +164,24 @@ def _resolve_scope_session_id(
     session_value: str | None,
     run_id: str | None = None,
 ) -> str | None:
-    if session_value not in {None, "latest"}:
-        return session_value
-    if run_id is not None:
-        return None
-    return store.get_latest_session_id()
+    return ClawGraphQueryService(store=store).resolve_session_id(
+        session=session_value,
+        run_id=run_id,
+    )
+
+
+def _resolve_scope_run_id(
+    *,
+    store: SQLiteFactStore,
+    session_value: str | None,
+    run_value: str | None,
+    default_latest_run: bool = False,
+) -> str | None:
+    return ClawGraphQueryService(store=store).resolve_run_id(
+        session=session_value,
+        run_id=run_value,
+        default_latest_run=default_latest_run,
+    )
 
 
 def _load_facts_for_scope(
@@ -139,16 +189,14 @@ def _load_facts_for_scope(
     store: SQLiteFactStore,
     session_value: str | None,
     run_id: str | None = None,
+    default_latest_run: bool = False,
 ) -> tuple[str, list]:
-    session_id = _resolve_scope_session_id(
-        store=store,
-        session_value=session_value,
+    scope = ClawGraphQueryService(store=store).load_scope(
+        session=session_value,
         run_id=run_id,
+        default_latest_run=default_latest_run,
     )
-    facts = store.list_facts(session_id=session_id, run_id=run_id)
-    if not facts:
-        raise ValueError("no facts found in scope")
-    return facts[0].session_id, facts
+    return scope.session_id, scope.facts
 
 
 def _artifact_signature(artifact) -> str:
@@ -202,10 +250,29 @@ def _persist_unique_artifacts(
         if signature in seen_signatures:
             skipped_count += 1
             continue
-        store.append_artifact(artifact)
         persisted_artifacts.append(artifact)
         seen_signatures.add(signature)
+    if persisted_artifacts:
+        store.append_artifacts(persisted_artifacts)
     return persisted_artifacts, skipped_count
+
+
+def _body_ref_from_fact_payload(payload: dict) -> dict | None:
+    body_ref = payload.get("body_ref")
+    if isinstance(body_ref, dict):
+        return body_ref
+    return None
+
+
+def _decode_body_payload(body: bytes) -> tuple[str, dict | list | None]:
+    text = body.decode("utf-8", errors="replace")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return text, None
+    if isinstance(parsed, (dict, list)):
+        return text, parsed
+    return text, None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -218,6 +285,29 @@ def _build_parser() -> argparse.ArgumentParser:
     proxy.add_argument("--store", default=DEFAULT_STORE_URI)
     proxy.add_argument("--host", default="127.0.0.1")
     proxy.add_argument("--port", type=int, default=8080)
+    proxy.add_argument("--auth-token")
+    proxy.add_argument("--max-request-body-bytes", type=int, default=1024 * 1024)
+    proxy.add_argument("--max-response-body-bytes", type=int, default=4 * 1024 * 1024)
+    proxy.add_argument("--max-capture-bytes", type=int, default=16 * 1024)
+    proxy.add_argument("--max-stream-chunk-facts", type=int, default=32)
+    proxy.add_argument("--disable-session-user-binding", action="store_true")
+    proxy.add_argument("--payload-dir")
+
+    payload = subparsers.add_parser("payload", help="Read or garbage-collect spilled payload sidecars")
+    payload_subparsers = payload.add_subparsers(dest="payload_command")
+
+    payload_read = payload_subparsers.add_parser("read", help="Read one spilled payload body")
+    payload_read.add_argument("--store", default=DEFAULT_STORE_URI)
+    payload_read.add_argument("--payload-dir")
+    payload_read.add_argument("--fact-id", required=True)
+    payload_read.add_argument("--json", action="store_true")
+
+    payload_gc = payload_subparsers.add_parser("gc", help="Garbage-collect unreferenced payload sidecars")
+    payload_gc.add_argument("--store", default=DEFAULT_STORE_URI)
+    payload_gc.add_argument("--payload-dir")
+    payload_gc.add_argument("--dry-run", action="store_true")
+    payload_gc.add_argument("--grace-seconds", type=int, default=300)
+    payload_gc.add_argument("--json", action="store_true")
 
     replay = subparsers.add_parser("replay", help="Inspect a session replay")
     replay.add_argument("--session", default="latest")
@@ -260,6 +350,11 @@ def _build_parser() -> argparse.ArgumentParser:
     list_sessions.add_argument("--store", default=DEFAULT_STORE_URI)
     list_sessions.add_argument("--json", action="store_true")
 
+    list_runs = list_subparsers.add_parser("runs", help="List runs for a session")
+    list_runs.add_argument("--session", default="latest")
+    list_runs.add_argument("--store", default=DEFAULT_STORE_URI)
+    list_runs.add_argument("--json", action="store_true")
+
     list_requests = list_subparsers.add_parser("requests", help="List request spans for a session")
     list_requests.add_argument("--session", default="latest")
     list_requests.add_argument("--run-id")
@@ -276,7 +371,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     list_readiness = list_subparsers.add_parser(
         "readiness",
-        help="List builder readiness across recent sessions",
+        help="List builder readiness across recent runs",
     )
     list_readiness.add_argument("--store", default=DEFAULT_STORE_URI)
     list_readiness.add_argument("--builder")
@@ -401,8 +496,67 @@ def main(argv: list[str] | None = None) -> int:
                 store_uri=args.store,
                 model_upstream=args.model_upstream,
                 tool_upstream=args.tool_upstream,
+                auth_token=args.auth_token,
+                max_request_body_bytes=args.max_request_body_bytes,
+                max_response_body_bytes=args.max_response_body_bytes,
+                max_capture_bytes=args.max_capture_bytes,
+                max_stream_chunk_facts=args.max_stream_chunk_facts,
+                enforce_session_user_binding=not args.disable_session_user_binding,
+                payload_dir=args.payload_dir,
             )
         )
+        return 0
+
+    if args.command == "payload" and args.payload_command == "read":
+        try:
+            store = SQLiteFactStore(args.store)
+            fact = store.get_fact(args.fact_id)
+            if fact is None:
+                raise ValueError(f"fact not found: {args.fact_id}")
+            body_ref = _body_ref_from_fact_payload(fact.payload)
+            if body_ref is None:
+                raise ValueError(f"fact does not reference a spilled payload: {args.fact_id}")
+            payload_store = LocalPayloadStore(
+                root_dir=args.payload_dir,
+                store_uri=args.store,
+            )
+            body = payload_store.read_bytes(body_ref)
+            text, parsed = _decode_body_payload(body)
+            if args.json:
+                payload = {
+                    "fact_id": fact.fact_id,
+                    "run_id": fact.run_id,
+                    "session_id": fact.session_id,
+                    "request_id": fact.request_id,
+                    "kind": fact.kind,
+                    "body_ref": body_ref,
+                    "integrity_status": "verified",
+                    "text": text,
+                }
+                if parsed is not None:
+                    payload["json"] = parsed
+                _print_output(payload)
+            else:
+                print(text)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "payload" and args.payload_command == "gc":
+        try:
+            store = SQLiteFactStore(args.store)
+            payload_store = LocalPayloadStore(
+                root_dir=args.payload_dir,
+                store_uri=args.store,
+            )
+            result = payload_store.garbage_collect(
+                referenced_body_refs=(body_ref for _, body_ref in store.iter_fact_body_refs()),
+                dry_run=args.dry_run,
+                grace_period_seconds=args.grace_seconds,
+            )
+            _print_output(result if args.json else _render_payload_gc(result))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         return 0
 
     if args.command == "bootstrap" and args.bootstrap_command == "openclaw":
@@ -422,6 +576,21 @@ def main(argv: list[str] | None = None) -> int:
         store = SQLiteFactStore(args.store)
         sessions = list(store.iter_sessions())
         _print_output(sessions if args.json else _render_session_list(sessions))
+        return 0
+
+    if args.command == "list" and args.list_command == "runs":
+        try:
+            store = SQLiteFactStore(args.store)
+            session_id = _resolve_scope_session_id(
+                store=store,
+                session_value=args.session,
+            )
+            if session_id is None:
+                raise ValueError("no sessions found in store")
+            runs = list(store.iter_runs(session_id=session_id))
+            _print_output(runs if args.json else _render_run_list(session_id, runs))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         return 0
 
     if args.command == "list" and args.list_command == "requests":
@@ -458,6 +627,7 @@ def main(argv: list[str] | None = None) -> int:
                 [
                     {
                         "fact_id": fact.fact_id,
+                        "run_id": fact.run_id,
                         "request_id": fact.request_id,
                         "actor": fact.actor,
                         "kind": fact.kind,
@@ -475,9 +645,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "list" and args.list_command == "readiness":
         store = SQLiteFactStore(args.store)
         rows = []
-        for session_id in list(store.iter_sessions())[: args.limit]:
-            facts = store.list_facts(session_id=session_id)
-            artifacts = store.list_artifacts(session_id=session_id, latest_only=True)
+        for run_id in list(store.iter_runs())[: args.limit]:
+            facts = store.list_facts(run_id=run_id)
+            if not facts:
+                continue
+            session_id = facts[0].session_id
+            artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=run_id,
+                latest_only=True,
+            )
             summary = build_dataset_readiness_summary(
                 facts,
                 artifacts,
@@ -495,7 +672,10 @@ def main(argv: list[str] | None = None) -> int:
                 session_value=args.session,
                 run_id=args.run_id,
             )
-            artifacts = store.list_artifacts(session_id=session_id, run_id=args.run_id)
+            artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=args.run_id,
+            )
             _print_output(
                 {"facts": len(facts), "session_id": session_id, "replay": render_session_replay(facts, artifacts)}
                 if args.json
@@ -513,11 +693,17 @@ def main(argv: list[str] | None = None) -> int:
                 session_value=args.session,
                 run_id=args.run_id,
             )
+            artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=args.run_id,
+                latest_only=True,
+            )
             groups = correlate_request_groups(facts)
             branches, _ = infer_branches(groups, facts=facts)
             _print_output(
                 [
                     {
+                        "run_id": branch.run_id,
                         "branch_id": branch.branch_id,
                         "branch_type": branch.branch_type,
                         "status": branch.status,
@@ -528,7 +714,7 @@ def main(argv: list[str] | None = None) -> int:
                     for branch in branches
                 ]
                 if args.json
-                else _render_branch_list(session_id, build_branch_inspect_summaries(facts))
+                else _render_branch_list(session_id, build_branch_inspect_summaries(facts, artifacts))
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
@@ -557,8 +743,14 @@ def main(argv: list[str] | None = None) -> int:
                 session_value=args.session,
                 run_id=args.run_id,
             )
+            effective_run_id = _resolve_scope_run_id(
+                store=store,
+                session_value=args.session,
+                run_value=args.run_id,
+                default_latest_run=False,
+            )
             request_id = (
-                store.get_latest_request_id(session_id=session_id, run_id=args.run_id)
+                store.get_latest_request_id(session_id=session_id, run_id=effective_run_id)
                 if args.request_id == "latest"
                 else args.request_id
             )
@@ -567,11 +759,16 @@ def main(argv: list[str] | None = None) -> int:
             facts = store.list_facts(
                 session_id=session_id,
                 request_id=request_id,
-                run_id=args.run_id,
+                run_id=effective_run_id,
             )
             if not facts:
                 raise ValueError(f"request not found: {request_id}")
-            summary = get_request_span_summary(facts, request_id)
+            artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=effective_run_id,
+                latest_only=True,
+            )
+            summary = get_request_span_summary(facts, request_id, artifacts)
             _print_output(summary.to_dict() if args.json else render_request_inspect(summary))
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
@@ -585,11 +782,16 @@ def main(argv: list[str] | None = None) -> int:
                 session_value=args.session,
                 run_id=args.run_id,
             )
+            artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=args.run_id,
+                latest_only=True,
+            )
             if args.branch_id:
-                summary = get_branch_inspect_summary(facts, args.branch_id)
+                summary = get_branch_inspect_summary(facts, args.branch_id, artifacts)
                 _print_output(summary.to_dict() if args.json else render_branch_inspect(summary))
             else:
-                summaries = build_branch_inspect_summaries(facts)
+                summaries = build_branch_inspect_summaries(facts, artifacts)
                 _print_output(
                     [summary.to_dict() for summary in summaries]
                     if args.json
@@ -609,7 +811,24 @@ def main(argv: list[str] | None = None) -> int:
                 session_value=args.session,
                 run_value=args.run_id,
             )
-            session_id = args.session_id or resolved_session_id or _infer_session_id_from_target_ref(target_ref)
+            inferred_target_run_id = _infer_run_id_from_target_ref(target_ref)
+            session_id = (
+                args.session_id
+                or resolved_session_id
+                or _infer_session_id_from_target_ref(target_ref)
+            )
+            effective_run_id = (
+                args.run_id
+                or inferred_target_run_id
+                or _resolve_scope_run_id(
+                    store=store,
+                    session_value=args.session,
+                    run_value=args.run_id,
+                    default_latest_run=not target_ref.startswith("session:"),
+                )
+            )
+            if session_id is None and effective_run_id is not None:
+                session_id = _resolve_session_id_for_run(store=store, run_id=effective_run_id)
             artifact = new_artifact_record(
                 artifact_type=args.artifact_type,
                 target_ref=target_ref,
@@ -617,7 +836,7 @@ def main(argv: list[str] | None = None) -> int:
                 payload=payload,
                 version=args.version,
                 session_id=session_id,
-                run_id=args.run_id,
+                run_id=effective_run_id,
                 status=args.status,
                 confidence=args.confidence,
                 supersedes_artifact_id=args.supersedes_artifact_id,
@@ -707,6 +926,7 @@ def main(argv: list[str] | None = None) -> int:
                 store=store,
                 session_value=args.session,
                 run_id=args.run_id,
+                default_latest_run=True,
             )
             producer = args.producer or f"clawgraph.{args.template}"
             plan = plan_artifact_bootstrap(
@@ -722,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
                 persisted_artifacts, skipped_count = _persist_unique_artifacts(
                     store=store,
                     session_id=session_id,
-                    run_id=args.run_id,
+                    run_id=facts[0].run_id,
                     artifacts=plan.artifacts,
                 )
             _print_output(
@@ -755,10 +975,11 @@ def main(argv: list[str] | None = None) -> int:
                 store=store,
                 session_value=args.session,
                 run_id=args.run_id,
+                default_latest_run=True,
             )
             artifacts = store.list_artifacts(
                 session_id=session_id,
-                run_id=args.run_id,
+                run_id=facts[0].run_id,
                 latest_only=True,
             )
             summary = build_dataset_readiness_summary(
@@ -816,10 +1037,11 @@ def main(argv: list[str] | None = None) -> int:
                 store=store,
                 session_value=args.session,
                 run_id=args.run_id,
+                default_latest_run=True,
             )
             existing_artifacts = store.list_artifacts(
                 session_id=session_id,
-                run_id=args.run_id,
+                run_id=facts[0].run_id,
                 latest_only=True,
             )
             staged_artifacts = []
@@ -852,14 +1074,14 @@ def main(argv: list[str] | None = None) -> int:
             output_path = args.out or _default_export_output_path(
                 session_id=session_id,
                 builder=args.builder,
-                run_id=args.run_id,
+                run_id=facts[0].run_id,
             )
             export_plan = plan_dataset_export_for_scope(
                 builder=args.builder,
                 facts=facts,
                 artifacts=combined_artifacts,
                 out=output_path,
-                run_id=args.run_id,
+                run_id=facts[0].run_id,
             )
 
             persisted_artifacts = []
@@ -871,7 +1093,7 @@ def main(argv: list[str] | None = None) -> int:
                     persisted_artifacts, skipped_duplicates = _persist_unique_artifacts(
                         store=store,
                         session_id=session_id,
-                        run_id=args.run_id,
+                        run_id=facts[0].run_id,
                         artifacts=staged_artifacts,
                     )
                 if export_plan.ready:
@@ -879,14 +1101,14 @@ def main(argv: list[str] | None = None) -> int:
                         store_uri=args.store,
                         builder=args.builder,
                         session=session_id,
-                        run_id=args.run_id,
+                        run_id=facts[0].run_id,
                         out=output_path,
                     )
                     exported = True
 
             payload = {
                 "session_id": session_id,
-                "run_id": args.run_id,
+                "run_id": facts[0].run_id,
                 "builder": export_plan.builder,
                 "template": None if args.skip_bootstrap else args.template,
                 "dry_run": args.dry_run,
@@ -928,7 +1150,7 @@ def _render_branch_list(session_id: str, summaries: list) -> str:
     lines = [f"Session: {session_id}", f"Branches: {len(summaries)}", ""]
     for summary in summaries:
         lines.append(
-            f"{summary.branch_id} type={summary.branch_type} source={summary.source} "
+            f"{summary.branch_id} run={summary.run_id} type={summary.branch_type} source={summary.source} "
             f"status={summary.status} parent={summary.parent_branch_id} "
             f"requests={summary.request_count}"
         )
@@ -968,21 +1190,31 @@ def _render_session_list(sessions: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _render_run_list(session_id: str, runs: list[str]) -> str:
+    if not runs:
+        return f"Session: {session_id}\nRuns: 0"
+    lines = [f"Session: {session_id}", f"Runs: {len(runs)}", ""]
+    lines.extend(runs)
+    return "\n".join(lines)
+
+
 def _render_request_list(session_id: str, requests: list) -> str:
-    lines = [f"Session: {session_id}", f"Requests: {len(requests)}", ""]
+    run_ids = sorted({request.run_id for request in requests})
+    lines = [f"Session: {session_id}", f"Runs: {', '.join(run_ids)}", f"Requests: {len(requests)}", ""]
     for request in requests:
         lines.append(
-            f"{request.request_id} path={request.path} outcome={request.outcome} "
+            f"{request.request_id} run={request.run_id} path={request.path} outcome={request.outcome} "
             f"status={request.status_code} branch={request.branch_id}"
         )
     return "\n".join(lines)
 
 
 def _render_fact_list(session_id: str, facts: list) -> str:
-    lines = [f"Session: {session_id}", f"Facts: {len(facts)}", ""]
+    run_ids = sorted({fact.run_id for fact in facts})
+    lines = [f"Session: {session_id}", f"Runs: {', '.join(run_ids)}", f"Facts: {len(facts)}", ""]
     for fact in facts:
         lines.append(
-            f"{fact.fact_id} request={fact.request_id} actor={fact.actor} kind={fact.kind}"
+            f"{fact.fact_id} run={fact.run_id} request={fact.request_id} actor={fact.actor} kind={fact.kind}"
         )
     return "\n".join(lines)
 
@@ -990,7 +1222,7 @@ def _render_fact_list(session_id: str, facts: list) -> str:
 def _render_readiness_list(rows: list[dict]) -> str:
     if not rows:
         return "No readiness rows found."
-    lines = [f"Sessions: {len(rows)}", ""]
+    lines = [f"Runs: {len(rows)}", ""]
     for row in rows:
         builder_text = "; ".join(
             (
@@ -1000,7 +1232,8 @@ def _render_readiness_list(rows: list[dict]) -> str:
             for builder in row["builders"]
         )
         lines.append(
-            f"{row['session_id']} requests={row['request_spans']} "
+            f"{row['session_id']} run={row.get('run_id') or '<multiple>'} "
+            f"requests={row['request_spans']} "
             f"artifacts={row['active_artifacts']} {builder_text}"
         )
     return "\n".join(lines)
@@ -1018,6 +1251,36 @@ def _render_export_plan(plan) -> str:
     if plan.blockers:
         lines.extend(["Blockers:"])
         lines.extend(f"- {blocker}" for blocker in plan.blockers)
+    return "\n".join(lines)
+
+
+def _render_payload_gc(payload: dict) -> str:
+    lines = [
+        f"Payload root: {payload['root_dir']}",
+        f"Managed root: {payload['managed_root']}",
+        f"Dry run: {payload['dry_run']}",
+        f"Grace seconds: {payload['grace_period_seconds']}",
+        f"Referenced files: {payload['referenced_files']}",
+        f"Scanned files: {payload['scanned_files']}",
+        f"Managed files: {payload['managed_files']}",
+        f"Skipped unmanaged files: {payload['skipped_unmanaged_files']}",
+        f"Orphan files: {payload['orphan_files']}",
+        f"Skipped recent files: {payload['skipped_recent_files']}",
+    ]
+    if payload["dry_run"]:
+        lines.extend(
+            [
+                f"Would delete files: {payload['would_delete_files']}",
+                f"Would delete bytes: {payload['would_delete_bytes']}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"Deleted files: {payload['deleted_files']}",
+                f"Deleted bytes: {payload['deleted_bytes']}",
+            ]
+        )
     return "\n".join(lines)
 
 
