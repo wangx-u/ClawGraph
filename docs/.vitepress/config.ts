@@ -9,6 +9,7 @@ export default defineConfig({
     nav: [
       { text: "Start Here", link: "/guides/start_here" },
       { text: "Guides", link: "/guides/quickstart" },
+      { text: "Design", link: "/design/index" },
       { text: "中文", link: "/zh-CN/README" },
       { text: "Examples", link: "/guides/examples" },
       { text: "Concepts", link: "/concepts/execution_facts" },
@@ -64,6 +65,19 @@ export default defineConfig({
               text: "Custom Artifacts and Builders",
               link: "/guides/custom_artifacts_and_builders"
             },
+          ]
+        }
+      ],
+      "/design/": [
+        {
+          text: "Design",
+          items: [
+            { text: "Overview", link: "/design/index" },
+            { text: "Evidence Capture and Annotation", link: "/design/capture_and_labeling" },
+            { text: "Cohort Curation", link: "/design/cohort_curation" },
+            { text: "Dataset Snapshots", link: "/design/dataset_construction" },
+            { text: "Slice Coverage and Routing", link: "/design/task_model_policy" },
+            { text: "Evaluation and Rollout", link: "/design/replacement_validation" }
           ]
         }
       ],

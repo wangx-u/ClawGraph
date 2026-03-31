@@ -90,4 +90,5 @@ If you want a gentler decision page before committing to one path, use
 
 - [`CLI Reference`](/reference/cli_reference) for command flags and target shortcuts
 - [`Execution Facts`](/concepts/execution_facts) and [`Artifact Protocol`](/concepts/artifact_protocol) for the data model
+- [`Design Overview`](/design/index) for proxy-to-RL dataset curation, task-model mapping, and small-model replacement standards
 - [`What is ClawGraph`](/overview/what_is_clawgraph), [`Architecture`](/overview/architecture), [`Roadmap`](/overview/roadmap), and [`Why Not Tracing`](/overview/why_not_tracing) for system design
