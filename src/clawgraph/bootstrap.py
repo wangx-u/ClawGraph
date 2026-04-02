@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from uuid import uuid4
 
+from clawgraph.artifacts.annotations import build_e1_annotation_artifacts
 from clawgraph.protocol.factories import new_artifact_record, new_fact_event, new_semantic_event_fact
 from clawgraph.store import SQLiteFactStore
 
@@ -176,10 +177,19 @@ def bootstrap_openclaw_session(
         run_id=run_id,
         metadata={"capture_source": "bootstrap"},
     )
+    annotation_artifacts = build_e1_annotation_artifacts(
+        facts=[main_request, main_error, retry_request, retry_declared, retry_response],
+        producer="bootstrap.e1_annotation",
+        version="clawgraph.e1.v1",
+        session_id=session_id,
+        run_id=run_id,
+        status="active",
+        template_name="bootstrap-openclaw",
+    )
 
     for fact in (main_request, main_error, retry_request, retry_declared, retry_response):
         store.append_fact(fact)
-    for artifact in (score_artifact, preference_artifact):
+    for artifact in (score_artifact, preference_artifact, *annotation_artifacts):
         store.append_artifact(artifact)
 
     return BootstrapResult(
@@ -189,5 +199,9 @@ def bootstrap_openclaw_session(
         request_ids=["req_main_1", "req_retry_1"],
         response_fact_id=retry_response.fact_id,
         branch_ids=["br_main", "br_retry_declared_1"],
-        artifact_ids=[score_artifact.artifact_id, preference_artifact.artifact_id],
+        artifact_ids=[
+            score_artifact.artifact_id,
+            preference_artifact.artifact_id,
+            *[artifact.artifact_id for artifact in annotation_artifacts],
+        ],
     )

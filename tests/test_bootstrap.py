@@ -26,6 +26,7 @@ class BootstrapTest(unittest.TestCase):
             self.assertTrue(builders["sft"].ready)
             self.assertTrue(builders["preference"].ready)
             self.assertTrue(builders["binary_rl"].ready)
+            self.assertEqual(readiness.evidence["level"], "E1")
 
     def test_bootstrap_generates_unique_default_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -138,10 +138,10 @@ class QuickstartFlowTest(unittest.TestCase):
                 "--json",
             )
 
-            self.assertEqual(first["persisted_count"], 3)
+            self.assertEqual(first["persisted_count"], 4)
             self.assertEqual(first["skipped_duplicates"], 0)
             self.assertEqual(second["persisted_count"], 0)
-            self.assertEqual(second["skipped_duplicates"], 3)
+            self.assertEqual(second["skipped_duplicates"], 4)
 
     def test_list_readiness_reports_recent_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -243,8 +243,8 @@ class QuickstartFlowTest(unittest.TestCase):
                 "--dry-run",
                 "--json",
             )
-            self.assertEqual(payload["bootstrap"]["planned_count"], 3)
-            self.assertEqual(payload["bootstrap"]["staged_count"], 3)
+            self.assertEqual(payload["bootstrap"]["planned_count"], 4)
+            self.assertEqual(payload["bootstrap"]["staged_count"], 4)
             self.assertTrue(payload["readiness"]["builders"][0]["ready"])
             self.assertGreater(payload["export"]["record_count"], 0)
             self.assertFalse(payload["export"]["exported"])
@@ -276,7 +276,7 @@ class QuickstartFlowTest(unittest.TestCase):
                 str(out_path),
                 "--json",
             )
-            self.assertEqual(payload["bootstrap"]["persisted_count"], 3)
+            self.assertEqual(payload["bootstrap"]["persisted_count"], 4)
             self.assertTrue(payload["export"]["exported"])
             self.assertEqual(payload["export"]["exported_count"], 1)
             self.assertTrue(out_path.exists())

@@ -76,7 +76,7 @@ class ArtifactBootstrapTest(unittest.TestCase):
                 version="v1",
             )
             self.assertTrue(plan.ready)
-            self.assertEqual(len(plan.artifacts), 3)
+            self.assertEqual(len(plan.artifacts), 4)
             preference_artifacts = [
                 artifact for artifact in plan.artifacts if artifact.artifact_type == "preference"
             ]
@@ -93,6 +93,7 @@ class ArtifactBootstrapTest(unittest.TestCase):
             builders = {builder.builder: builder for builder in readiness.builders}
             self.assertTrue(builders["binary_rl"].ready)
             self.assertTrue(builders["preference"].ready)
+            self.assertEqual(readiness.evidence["level"], "E1")
 
 
 if __name__ == "__main__":

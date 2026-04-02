@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from clawgraph.artifacts import E1_ANNOTATION_ARTIFACT_TYPE, E1_ANNOTATION_KIND
+from clawgraph.curation import freeze_cohort
 from clawgraph.export import (
     build_dataset_readiness_summary,
     export_dataset,
@@ -12,11 +14,83 @@ from clawgraph.export import (
     register_dataset_builder,
     unregister_dataset_builder,
 )
-from clawgraph.protocol.factories import new_artifact_record, new_fact_event
+from clawgraph.protocol.factories import new_artifact_record, new_fact_event, new_slice_record
 from clawgraph.store import SQLiteFactStore
 
 
 class ExportDatasetTest(unittest.TestCase):
+    def test_builtin_readiness_requires_e1_annotations(self) -> None:
+        request = new_fact_event(
+            run_id="run_1",
+            session_id="session_1",
+            actor="model",
+            kind="request_started",
+            payload={
+                "path": "/v1/chat/completions",
+                "json": {"messages": [{"role": "user", "content": "hi"}]},
+            },
+            request_id="req_1",
+        )
+        response = new_fact_event(
+            run_id="run_1",
+            session_id="session_1",
+            actor="model",
+            kind="response_finished",
+            payload={
+                "path": "/v1/chat/completions",
+                "status_code": 200,
+                "json": {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            },
+            request_id="req_1",
+            parent_ref=request.fact_id,
+        )
+        score = new_artifact_record(
+            artifact_type="score",
+            target_ref=f"fact:{response.fact_id}",
+            producer="judge-v1",
+            payload={"score": 1.0},
+            session_id="session_1",
+            run_id="run_1",
+        )
+
+        missing_annotation = build_dataset_readiness_summary(
+            [request, response],
+            [score],
+            builder="sft",
+        )
+        self.assertFalse(missing_annotation.builders[0].ready)
+        self.assertIn("missing E1 annotations", missing_annotation.builders[0].blockers[0])
+        self.assertEqual(missing_annotation.evidence["level"], "E0")
+
+        annotation = new_artifact_record(
+            artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+            target_ref="run:run_1",
+            producer="taxonomy-v1",
+            payload={
+                "annotation_kind": E1_ANNOTATION_KIND,
+                "task_family": "captured_agent_task",
+                "task_type": "generic_proxy_capture",
+                "task_template_hash": "tmpl_1",
+                "task_instance_key": "run:run_1",
+                "verifier_name": "judge-v1",
+                "verifier_score": 1.0,
+                "quality_confidence": 0.9,
+                "taxonomy_version": "taxonomy.v1",
+                "annotation_version": "e1.v1",
+                "source_channel": "captured",
+            },
+            session_id="session_1",
+            run_id="run_1",
+            confidence=0.9,
+        )
+        ready = build_dataset_readiness_summary(
+            [request, response],
+            [score, annotation],
+            builder="sft",
+        )
+        self.assertTrue(ready.builders[0].ready)
+        self.assertEqual(ready.evidence["level"], "E1")
+
     def test_export_sft_builder(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = Path(tempdir) / "facts.db"
@@ -73,6 +147,494 @@ class ExportDatasetTest(unittest.TestCase):
                 out_path.with_name(f"{out_path.name}.manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual(manifest["record_count"], 1)
+
+    def test_export_manifest_and_records_include_e1_annotation_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "annotated_sft.jsonl"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {"messages": [{"role": "user", "content": "hi"}]},
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "status_code": 200,
+                    "json": {"choices": [{"message": {"role": "assistant", "content": "hello"}}]},
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+            annotation = new_artifact_record(
+                artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                target_ref="run:run_1",
+                producer="taxonomy-v1",
+                payload={
+                    "annotation_kind": E1_ANNOTATION_KIND,
+                    "task_family": "captured_agent_task",
+                    "task_type": "generic_proxy_capture",
+                    "task_template_hash": "tmpl_1",
+                    "task_instance_key": "run:run_1",
+                    "verifier_name": "judge-v1",
+                    "verifier_score": 1.0,
+                    "quality_confidence": 0.9,
+                    "taxonomy_version": "taxonomy.v1",
+                    "annotation_version": "e1.v1",
+                    "source_channel": "captured",
+                },
+                session_id="session_1",
+                run_id="run_1",
+                confidence=0.9,
+            )
+
+            store.append_facts([request, response])
+            store.append_artifact(annotation)
+
+            count = export_dataset(
+                store_uri=f"sqlite:///{db_path}",
+                builder="sft",
+                session="session_1",
+                out=out_path,
+            )
+            self.assertEqual(count, 1)
+            record = json.loads(out_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(record["evidence_level"], "E1")
+            self.assertEqual(record["annotation"]["task_instance_key"], "run:run_1")
+            self.assertIn(record["split"], {"train", "val", "test"})
+            manifest = json.loads(
+                out_path.with_name(f"{out_path.name}.manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["evidence"]["level"], "E1")
+            self.assertEqual(manifest["evidence"]["annotated_runs"], 1)
+            self.assertEqual(record["dataset_snapshot_id"], manifest["dataset_snapshot_id"])
+            self.assertEqual(record["dataset_recipe_id"], manifest["dataset_recipe_id"])
+            self.assertIn("split", manifest)
+            snapshots = store.list_dataset_snapshots(builder="sft")
+            self.assertEqual(len(snapshots), 1)
+            self.assertEqual(
+                snapshots[0].dataset_snapshot_id,
+                manifest["dataset_snapshot_id"],
+            )
+
+    def test_export_dataset_from_cohort_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "cohort_sft.jsonl"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+            store.put_slice(
+                new_slice_record(
+                    slice_id="slice.capture",
+                    task_family="captured_agent_task",
+                    task_type="generic_proxy_capture",
+                    taxonomy_version="taxonomy.v1",
+                    sample_unit="run",
+                    verifier_contract="judge-v1",
+                    risk_level="medium",
+                    default_use="training_candidate",
+                    owner="ml-team",
+                )
+            )
+            for run_id, session_id, task_instance_key in (
+                ("run_1", "session_1", "task-1"),
+                ("run_2", "session_2", "task-2"),
+            ):
+                request = new_fact_event(
+                    run_id=run_id,
+                    session_id=session_id,
+                    actor="model",
+                    kind="request_started",
+                    payload={
+                        "path": "/v1/chat/completions",
+                        "json": {"messages": [{"role": "user", "content": run_id}]},
+                    },
+                    request_id=f"req_{run_id}",
+                )
+                response = new_fact_event(
+                    run_id=run_id,
+                    session_id=session_id,
+                    actor="model",
+                    kind="response_finished",
+                    payload={
+                        "path": "/v1/chat/completions",
+                        "status_code": 200,
+                        "json": {
+                            "choices": [
+                                {"message": {"role": "assistant", "content": f"ok {run_id}"}}
+                            ]
+                        },
+                    },
+                    request_id=f"req_{run_id}",
+                    parent_ref=request.fact_id,
+                )
+                annotation = new_artifact_record(
+                    artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                    target_ref=f"run:{run_id}",
+                    producer="taxonomy-v1",
+                    payload={
+                        "annotation_kind": E1_ANNOTATION_KIND,
+                        "task_family": "captured_agent_task",
+                        "task_type": "generic_proxy_capture",
+                        "task_template_hash": f"tmpl_{run_id}",
+                        "task_instance_key": task_instance_key,
+                        "verifier_name": "judge-v1",
+                        "verifier_score": 1.0,
+                        "quality_confidence": 0.9,
+                        "taxonomy_version": "taxonomy.v1",
+                        "annotation_version": "e1.v1",
+                        "source_channel": "captured",
+                    },
+                    session_id=session_id,
+                    run_id=run_id,
+                    confidence=0.9,
+                )
+                store.append_facts([request, response])
+                store.append_artifact(annotation)
+
+            cohort = freeze_cohort(
+                store=store,
+                slice_id="slice.capture",
+                name="capture-train",
+            )
+
+            count = export_dataset(
+                store_uri=f"sqlite:///{db_path}",
+                builder="sft",
+                cohort_id=cohort.cohort.cohort_id,
+                out=out_path,
+            )
+            self.assertEqual(count, 2)
+            rows = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual({row["cohort_id"] for row in rows}, {cohort.cohort.cohort_id})
+            manifest = json.loads(
+                out_path.with_name(f"{out_path.name}.manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["cohort_id"], cohort.cohort.cohort_id)
+            self.assertEqual(set(manifest["source_run_ids"]), {"run_1", "run_2"})
+            snapshots = store.list_dataset_snapshots(cohort_id=cohort.cohort.cohort_id)
+            self.assertEqual(len(snapshots), 1)
+            self.assertEqual(
+                snapshots[0].dataset_snapshot_id,
+                manifest["dataset_snapshot_id"],
+            )
+
+    def test_cohort_export_uses_frozen_artifact_view(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "frozen_view.jsonl"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+            store.put_slice(
+                new_slice_record(
+                    slice_id="slice.capture",
+                    task_family="captured_agent_task",
+                    task_type="generic_proxy_capture",
+                    taxonomy_version="taxonomy.v1",
+                    sample_unit="run",
+                    verifier_contract="judge-v1",
+                    risk_level="medium",
+                    default_use="training_candidate",
+                    owner="ml-team",
+                )
+            )
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {"messages": [{"role": "user", "content": "hi"}]},
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "status_code": 200,
+                    "json": {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+            annotation_v1 = new_artifact_record(
+                artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                target_ref="run:run_1",
+                producer="taxonomy-v1",
+                payload={
+                    "annotation_kind": E1_ANNOTATION_KIND,
+                    "task_family": "captured_agent_task",
+                    "task_type": "generic_proxy_capture",
+                    "task_template_hash": "tmpl_1",
+                    "task_instance_key": "task-1",
+                    "verifier_name": "judge-v1",
+                    "verifier_score": 0.9,
+                    "quality_confidence": 0.95,
+                    "taxonomy_version": "taxonomy.v1",
+                    "annotation_version": "e1.v1",
+                    "source_channel": "captured",
+                },
+                session_id="session_1",
+                run_id="run_1",
+                confidence=0.95,
+            )
+            store.append_facts([request, response])
+            store.append_artifact(annotation_v1)
+
+            cohort = freeze_cohort(
+                store=store,
+                slice_id="slice.capture",
+                name="capture-train",
+            )
+
+            store.append_artifact(
+                new_artifact_record(
+                    artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                    target_ref="run:run_1",
+                    producer="taxonomy-v1",
+                    payload={
+                        "annotation_kind": E1_ANNOTATION_KIND,
+                        "task_family": "captured_agent_task",
+                        "task_type": "generic_proxy_capture",
+                        "task_template_hash": "tmpl_1",
+                        "task_instance_key": "task-1",
+                        "verifier_name": "judge-v2",
+                        "verifier_score": 1.0,
+                        "quality_confidence": 1.0,
+                        "taxonomy_version": "taxonomy.v1",
+                        "annotation_version": "e1.v2",
+                        "source_channel": "captured",
+                    },
+                    session_id="session_1",
+                    run_id="run_1",
+                    confidence=1.0,
+                    supersedes_artifact_id=annotation_v1.artifact_id,
+                )
+            )
+
+            export_dataset(
+                store_uri=f"sqlite:///{db_path}",
+                builder="sft",
+                cohort_id=cohort.cohort.cohort_id,
+                out=out_path,
+            )
+            record = json.loads(out_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(record["annotation"]["annotation_version"], "e1.v1")
+
+    def test_multi_session_cohort_export_uses_run_specific_session_annotations(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            out_path = Path(tempdir) / "multi_session.jsonl"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+            store.put_slice(
+                new_slice_record(
+                    slice_id="slice.capture",
+                    task_family="captured_agent_task",
+                    task_type="generic_proxy_capture",
+                    taxonomy_version="taxonomy.v1",
+                    sample_unit="run",
+                    verifier_contract="judge-v1",
+                    risk_level="medium",
+                    default_use="training_candidate",
+                    owner="ml-team",
+                )
+            )
+            for session_id, run_id, task_instance_key, annotation_version in (
+                ("session_1", "run_1", "task-1", "e1.s1"),
+                ("session_2", "run_2", "task-2", "e1.s2"),
+            ):
+                request = new_fact_event(
+                    run_id=run_id,
+                    session_id=session_id,
+                    actor="model",
+                    kind="request_started",
+                    payload={
+                        "path": "/v1/chat/completions",
+                        "json": {"messages": [{"role": "user", "content": run_id}]},
+                    },
+                    request_id=f"req_{run_id}",
+                )
+                response = new_fact_event(
+                    run_id=run_id,
+                    session_id=session_id,
+                    actor="model",
+                    kind="response_finished",
+                    payload={
+                        "path": "/v1/chat/completions",
+                        "status_code": 200,
+                        "json": {
+                            "choices": [
+                                {"message": {"role": "assistant", "content": f"ok {run_id}"}}
+                            ]
+                        },
+                    },
+                    request_id=f"req_{run_id}",
+                    parent_ref=request.fact_id,
+                )
+                store.append_facts([request, response])
+                store.append_artifact(
+                    new_artifact_record(
+                        artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                        target_ref=f"session:{session_id}",
+                        producer="taxonomy-v1",
+                        payload={
+                            "annotation_kind": E1_ANNOTATION_KIND,
+                            "task_family": "captured_agent_task",
+                            "task_type": "generic_proxy_capture",
+                            "task_template_hash": f"tmpl_{session_id}",
+                            "task_instance_key": task_instance_key,
+                            "verifier_name": "judge-v1",
+                            "verifier_score": 0.9,
+                            "quality_confidence": 0.95,
+                            "taxonomy_version": "taxonomy.v1",
+                            "annotation_version": annotation_version,
+                            "source_channel": "captured",
+                        },
+                        session_id=session_id,
+                        confidence=0.95,
+                    )
+                )
+
+            cohort = freeze_cohort(
+                store=store,
+                slice_id="slice.capture",
+                name="capture-train",
+            )
+            export_dataset(
+                store_uri=f"sqlite:///{db_path}",
+                builder="sft",
+                cohort_id=cohort.cohort.cohort_id,
+                out=out_path,
+            )
+            rows = [
+                json.loads(line)
+                for line in out_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            by_run = {row["run_id"]: row for row in rows}
+            self.assertEqual(by_run["run_1"]["annotation"]["annotation_version"], "e1.s1")
+            self.assertEqual(by_run["run_1"]["annotation"]["task_instance_key"], "task-1")
+            self.assertEqual(by_run["run_2"]["annotation"]["annotation_version"], "e1.s2")
+            self.assertEqual(by_run["run_2"]["annotation"]["task_instance_key"], "task-2")
+
+    def test_cohort_export_blocks_incompatible_builder_sample_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            store = SQLiteFactStore(f"sqlite:///{db_path}")
+            store.put_slice(
+                new_slice_record(
+                    slice_id="slice.capture",
+                    task_family="captured_agent_task",
+                    task_type="generic_proxy_capture",
+                    taxonomy_version="taxonomy.v1",
+                    sample_unit="run",
+                    verifier_contract="judge-v1",
+                    risk_level="medium",
+                    default_use="training_candidate",
+                    owner="ml-team",
+                )
+            )
+
+            main_request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {"messages": [{"role": "user", "content": "hi"}]},
+                },
+                request_id="req_main",
+            )
+            main_error = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="proxy",
+                kind="error_raised",
+                payload={"path": "/v1/chat/completions", "status_code": 502},
+                request_id="req_main",
+                parent_ref=main_request.fact_id,
+            )
+            retry_request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={"path": "/v1/chat/completions"},
+                request_id="req_retry",
+            )
+            retry_response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={"path": "/v1/chat/completions", "status_code": 200},
+                request_id="req_retry",
+                parent_ref=retry_request.fact_id,
+            )
+            annotation = new_artifact_record(
+                artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                target_ref="run:run_1",
+                producer="taxonomy-v1",
+                payload={
+                    "annotation_kind": E1_ANNOTATION_KIND,
+                    "task_family": "captured_agent_task",
+                    "task_type": "generic_proxy_capture",
+                    "task_template_hash": "tmpl_1",
+                    "task_instance_key": "task-1",
+                    "verifier_name": "judge-v1",
+                    "verifier_score": 0.9,
+                    "quality_confidence": 0.95,
+                    "taxonomy_version": "taxonomy.v1",
+                    "annotation_version": "e1.v1",
+                    "source_channel": "captured",
+                },
+                session_id="session_1",
+                run_id="run_1",
+                confidence=0.95,
+            )
+            preference = new_artifact_record(
+                artifact_type="preference",
+                target_ref="session:session_1",
+                producer="judge-v1",
+                payload={"chosen": "br_retry_1", "rejected": "br_main"},
+                session_id="session_1",
+                run_id="run_1",
+            )
+
+            store.append_facts([main_request, main_error, retry_request, retry_response])
+            store.append_artifact(annotation)
+            store.append_artifact(preference)
+
+            cohort = freeze_cohort(
+                store=store,
+                slice_id="slice.capture",
+                name="capture-train",
+            )
+            plan = plan_dataset_export(
+                store_uri=f"sqlite:///{db_path}",
+                builder="preference",
+                cohort_id=cohort.cohort.cohort_id,
+            )
+            self.assertIn(
+                "builder sample_unit is incompatible with cohort slice contract",
+                " ".join(plan.blockers),
+            )
 
     def test_export_sft_builder_from_responses_api_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -753,6 +1315,29 @@ class ExportDatasetTest(unittest.TestCase):
             )
             store.append_fact(request)
             store.append_fact(response)
+            store.append_artifact(
+                new_artifact_record(
+                    artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                    target_ref="run:run_1",
+                    producer="taxonomy-v1",
+                    payload={
+                        "annotation_kind": E1_ANNOTATION_KIND,
+                        "task_family": "captured_agent_task",
+                        "task_type": "generic_proxy_capture",
+                        "task_template_hash": "tmpl_1",
+                        "task_instance_key": "run:run_1",
+                        "verifier_name": "judge-v1",
+                        "verifier_score": 1.0,
+                        "quality_confidence": 0.9,
+                        "taxonomy_version": "taxonomy.v1",
+                        "annotation_version": "e1.v1",
+                        "source_channel": "captured",
+                    },
+                    session_id="session_1",
+                    run_id="run_1",
+                    confidence=0.9,
+                )
+            )
 
             plan = plan_dataset_export(
                 store_uri=f"sqlite:///{db_path}",

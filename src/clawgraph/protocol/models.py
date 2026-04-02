@@ -63,3 +63,259 @@ class ArtifactRecord:
     confidence: float | None = None
     supersedes_artifact_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SliceRecord:
+    """Stable task slice definition used by cohort curation."""
+
+    slice_id: str
+    schema_version: str
+    task_family: str
+    task_type: str
+    taxonomy_version: str
+    sample_unit: str
+    verifier_contract: str
+    risk_level: str
+    default_use: str
+    owner: str
+    description: str | None = None
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "slice_id": self.slice_id,
+            "schema_version": self.schema_version,
+            "task_family": self.task_family,
+            "task_type": self.task_type,
+            "taxonomy_version": self.taxonomy_version,
+            "sample_unit": self.sample_unit,
+            "verifier_contract": self.verifier_contract,
+            "risk_level": self.risk_level,
+            "default_use": self.default_use,
+            "owner": self.owner,
+            "description": self.description,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
+class CohortRecord:
+    """Frozen cohort manifest referencing one or more registered slices."""
+
+    cohort_id: str
+    schema_version: str
+    name: str
+    status: str
+    slice_ids: list[str]
+    manifest: dict[str, Any]
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cohort_id": self.cohort_id,
+            "schema_version": self.schema_version,
+            "name": self.name,
+            "status": self.status,
+            "slice_ids": list(self.slice_ids),
+            "manifest": self.manifest,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
+class CohortMemberRecord:
+    """One run-level member captured inside a frozen cohort."""
+
+    member_id: str
+    cohort_id: str
+    slice_id: str
+    session_id: str
+    run_id: str
+    annotation_artifact_id: str
+    task_instance_key: str
+    task_template_hash: str | None = None
+    quality_confidence: float | None = None
+    verifier_score: float | None = None
+    source_channel: str | None = None
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "member_id": self.member_id,
+            "cohort_id": self.cohort_id,
+            "slice_id": self.slice_id,
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "annotation_artifact_id": self.annotation_artifact_id,
+            "task_instance_key": self.task_instance_key,
+            "task_template_hash": self.task_template_hash,
+            "quality_confidence": self.quality_confidence,
+            "verifier_score": self.verifier_score,
+            "source_channel": self.source_channel,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
+class DatasetSnapshotRecord:
+    """Persisted dataset snapshot manifest for one export."""
+
+    dataset_snapshot_id: str
+    schema_version: str
+    dataset_recipe_id: str
+    builder: str
+    sample_unit: str
+    cohort_id: str | None = None
+    output_path: str | None = None
+    record_count: int = 0
+    manifest: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "dataset_snapshot_id": self.dataset_snapshot_id,
+            "schema_version": self.schema_version,
+            "dataset_recipe_id": self.dataset_recipe_id,
+            "builder": self.builder,
+            "sample_unit": self.sample_unit,
+            "cohort_id": self.cohort_id,
+            "output_path": self.output_path,
+            "record_count": self.record_count,
+            "manifest": self.manifest,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
+class EvalSuiteRecord:
+    """Persisted evaluation suite bound to one slice and asset source."""
+
+    eval_suite_id: str
+    schema_version: str
+    slice_id: str
+    suite_kind: str
+    name: str
+    status: str
+    cohort_id: str | None = None
+    dataset_snapshot_id: str | None = None
+    manifest: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "eval_suite_id": self.eval_suite_id,
+            "schema_version": self.schema_version,
+            "slice_id": self.slice_id,
+            "suite_kind": self.suite_kind,
+            "name": self.name,
+            "status": self.status,
+            "cohort_id": self.cohort_id,
+            "dataset_snapshot_id": self.dataset_snapshot_id,
+            "manifest": self.manifest,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
+class ScorecardRecord:
+    """Persisted evaluation scorecard for one model comparison."""
+
+    scorecard_id: str
+    schema_version: str
+    eval_suite_id: str
+    slice_id: str
+    candidate_model: str
+    baseline_model: str
+    verdict: str
+    metrics: dict[str, Any] = field(default_factory=dict)
+    thresholds: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scorecard_id": self.scorecard_id,
+            "schema_version": self.schema_version,
+            "eval_suite_id": self.eval_suite_id,
+            "slice_id": self.slice_id,
+            "candidate_model": self.candidate_model,
+            "baseline_model": self.baseline_model,
+            "verdict": self.verdict,
+            "metrics": self.metrics,
+            "thresholds": self.thresholds,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
+class PromotionDecisionRecord:
+    """Persisted rollout decision produced from one scorecard."""
+
+    promotion_decision_id: str
+    schema_version: str
+    slice_id: str
+    scorecard_id: str
+    stage: str
+    decision: str
+    coverage_policy_version: str
+    summary: str
+    rollback_conditions: list[str] = field(default_factory=list)
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "promotion_decision_id": self.promotion_decision_id,
+            "schema_version": self.schema_version,
+            "slice_id": self.slice_id,
+            "scorecard_id": self.scorecard_id,
+            "stage": self.stage,
+            "decision": self.decision,
+            "coverage_policy_version": self.coverage_policy_version,
+            "summary": self.summary,
+            "rollback_conditions": list(self.rollback_conditions),
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
+class FeedbackQueueRecord:
+    """Persisted feedback item that should flow back into curation/training."""
+
+    feedback_id: str
+    schema_version: str
+    slice_id: str
+    source: str
+    status: str
+    target_ref: str
+    reason: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "feedback_id": self.feedback_id,
+            "schema_version": self.schema_version,
+            "slice_id": self.slice_id,
+            "source": self.source,
+            "status": self.status,
+            "target_ref": self.target_ref,
+            "reason": self.reason,
+            "payload": self.payload,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "metadata": self.metadata,
+        }

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from clawgraph.artifacts import summarize_e1_annotations
 from clawgraph.builders import BuildContext, get_dataset_builder, list_dataset_builders
 from clawgraph.export.dataset import build_records_for_builder
 from clawgraph.graph import build_request_span_summaries
@@ -32,6 +33,7 @@ class DatasetReadinessSummary:
     run_id: str | None
     request_spans: int
     active_artifacts: int
+    evidence: dict[str, Any]
     builders: list[BuilderReadiness]
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,6 +42,7 @@ class DatasetReadinessSummary:
             "run_id": self.run_id,
             "request_spans": self.request_spans,
             "active_artifacts": self.active_artifacts,
+            "evidence": self.evidence,
             "builders": [builder.to_dict() for builder in self.builders],
         }
 
@@ -88,11 +91,13 @@ def build_dataset_readiness_summary(
         )
 
     active_artifacts = [artifact for artifact in artifacts if artifact.status == "active"]
+    evidence = summarize_e1_annotations(facts=facts, artifacts=artifacts)
     return DatasetReadinessSummary(
         session_id=facts[0].session_id,
         run_id=run_ids[0] if len(run_ids) == 1 else None,
         request_spans=len(build_request_span_summaries(facts)),
         active_artifacts=len(active_artifacts),
+        evidence=evidence,
         builders=readiness_items,
     )
 
@@ -105,6 +110,12 @@ def render_dataset_readiness(summary: DatasetReadinessSummary) -> str:
         f"Run: {summary.run_id or '<multiple>'}",
         f"Request spans: {summary.request_spans}",
         f"Active artifacts: {summary.active_artifacts}",
+        (
+            "Evidence: "
+            f"level={summary.evidence['level']} "
+            f"annotated_runs={summary.evidence['annotated_runs']}/{summary.evidence['run_count']} "
+            f"annotation_artifacts={summary.evidence['annotation_artifacts']}"
+        ),
         "",
         "Builders:",
     ]

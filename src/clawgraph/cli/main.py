@@ -8,6 +8,7 @@ from pathlib import Path
 
 from clawgraph.artifacts import plan_artifact_bootstrap
 from clawgraph.bootstrap import bootstrap_openclaw_session
+from clawgraph.curation import freeze_cohort, list_slice_candidates
 from clawgraph.export import (
     build_dataset_readiness_summary,
     export_dataset,
@@ -28,7 +29,11 @@ from clawgraph.graph import (
     render_session_inspect,
     render_session_replay,
 )
-from clawgraph.protocol.factories import new_artifact_record, new_semantic_event_fact
+from clawgraph.protocol.factories import (
+    new_artifact_record,
+    new_semantic_event_fact,
+    new_slice_record,
+)
 from clawgraph.proxy import ProxyConfig, run_proxy_server
 from clawgraph.proxy.payload_store import LocalPayloadStore
 from clawgraph.query import ClawGraphQueryService
@@ -378,6 +383,77 @@ def _build_parser() -> argparse.ArgumentParser:
     list_readiness.add_argument("--limit", type=int, default=20)
     list_readiness.add_argument("--json", action="store_true")
 
+    slice_parser = subparsers.add_parser("slice", help="Manage slice registry and candidate pools")
+    slice_subparsers = slice_parser.add_subparsers(dest="slice_command")
+
+    slice_register = slice_subparsers.add_parser("register", help="Create or update a slice")
+    slice_register.add_argument("--store", default=DEFAULT_STORE_URI)
+    slice_register.add_argument("--slice-id", required=True)
+    slice_register.add_argument("--task-family", required=True)
+    slice_register.add_argument("--task-type", required=True)
+    slice_register.add_argument("--taxonomy-version", required=True)
+    slice_register.add_argument("--sample-unit", required=True)
+    slice_register.add_argument("--verifier-contract", required=True)
+    slice_register.add_argument("--risk-level", required=True)
+    slice_register.add_argument("--default-use", required=True)
+    slice_register.add_argument("--owner", required=True)
+    slice_register.add_argument("--description")
+    slice_register.add_argument("--metadata", default="{}")
+    slice_register.add_argument("--json", action="store_true")
+
+    slice_list = slice_subparsers.add_parser("list", help="List registered slices")
+    slice_list.add_argument("--store", default=DEFAULT_STORE_URI)
+    slice_list.add_argument("--task-family")
+    slice_list.add_argument("--task-type")
+    slice_list.add_argument("--taxonomy-version")
+    slice_list.add_argument("--default-use")
+    slice_list.add_argument("--json", action="store_true")
+
+    slice_candidates = slice_subparsers.add_parser(
+        "candidates",
+        help="Resolve the candidate pool for one registered slice",
+    )
+    slice_candidates.add_argument("--store", default=DEFAULT_STORE_URI)
+    slice_candidates.add_argument("--slice-id", required=True)
+    slice_candidates.add_argument("--session")
+    slice_candidates.add_argument("--run-id")
+    slice_candidates.add_argument("--task-instance-key")
+    slice_candidates.add_argument("--task-template-hash")
+    slice_candidates.add_argument("--min-quality-confidence", type=float)
+    slice_candidates.add_argument("--min-verifier-score", type=float)
+    slice_candidates.add_argument("--source-channel")
+    slice_candidates.add_argument("--limit", type=int)
+    slice_candidates.add_argument("--json", action="store_true")
+
+    cohort = subparsers.add_parser("cohort", help="Freeze and inspect cohorts")
+    cohort_subparsers = cohort.add_subparsers(dest="cohort_command")
+
+    cohort_freeze = cohort_subparsers.add_parser("freeze", help="Freeze a cohort from a slice candidate pool")
+    cohort_freeze.add_argument("--store", default=DEFAULT_STORE_URI)
+    cohort_freeze.add_argument("--slice-id", required=True)
+    cohort_freeze.add_argument("--name")
+    cohort_freeze.add_argument("--cohort-id")
+    cohort_freeze.add_argument("--session")
+    cohort_freeze.add_argument("--run-id")
+    cohort_freeze.add_argument("--task-instance-key")
+    cohort_freeze.add_argument("--task-template-hash")
+    cohort_freeze.add_argument("--min-quality-confidence", type=float)
+    cohort_freeze.add_argument("--min-verifier-score", type=float)
+    cohort_freeze.add_argument("--source-channel")
+    cohort_freeze.add_argument("--limit", type=int)
+    cohort_freeze.add_argument("--json", action="store_true")
+
+    cohort_list = cohort_subparsers.add_parser("list", help="List frozen cohorts")
+    cohort_list.add_argument("--store", default=DEFAULT_STORE_URI)
+    cohort_list.add_argument("--slice-id")
+    cohort_list.add_argument("--status")
+    cohort_list.add_argument("--json", action="store_true")
+
+    cohort_show = cohort_subparsers.add_parser("show", help="Show one frozen cohort")
+    cohort_show.add_argument("--store", default=DEFAULT_STORE_URI)
+    cohort_show.add_argument("--cohort-id", required=True)
+    cohort_show.add_argument("--json", action="store_true")
+
     bootstrap = subparsers.add_parser("bootstrap", help="Seed a first-run session into the store")
     bootstrap_subparsers = bootstrap.add_subparsers(dest="bootstrap_command")
     bootstrap_openclaw = bootstrap_subparsers.add_parser(
@@ -453,6 +529,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--builder", required=True)
     dataset.add_argument("--session", default="latest")
     dataset.add_argument("--run-id")
+    dataset.add_argument("--cohort-id")
     dataset.add_argument("--store", default=DEFAULT_STORE_URI)
     dataset.add_argument("--out", type=Path)
     dataset.add_argument("--dry-run", action="store_true")
@@ -662,6 +739,123 @@ def main(argv: list[str] | None = None) -> int:
             )
             rows.append(summary.to_dict())
         _print_output(rows if args.json else _render_readiness_list(rows))
+        return 0
+
+    if args.command == "slice" and args.slice_command == "register":
+        try:
+            metadata = _load_json_argument(args.metadata, label="slice metadata")
+            store = SQLiteFactStore(args.store)
+            slice_record = new_slice_record(
+                slice_id=args.slice_id,
+                task_family=args.task_family,
+                task_type=args.task_type,
+                taxonomy_version=args.taxonomy_version,
+                sample_unit=args.sample_unit,
+                verifier_contract=args.verifier_contract,
+                risk_level=args.risk_level,
+                default_use=args.default_use,
+                owner=args.owner,
+                description=args.description,
+                metadata=metadata,
+            )
+            persisted = store.put_slice(slice_record)
+            _print_output(
+                persisted.to_dict()
+                if args.json
+                else _render_slice_record(persisted)
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "slice" and args.slice_command == "list":
+        store = SQLiteFactStore(args.store)
+        slices = store.list_slices(
+            task_family=args.task_family,
+            task_type=args.task_type,
+            taxonomy_version=args.taxonomy_version,
+            default_use=args.default_use,
+        )
+        _print_output(
+            [slice_record.to_dict() for slice_record in slices]
+            if args.json
+            else _render_slice_list(slices)
+        )
+        return 0
+
+    if args.command == "slice" and args.slice_command == "candidates":
+        try:
+            slice_record, candidates = list_slice_candidates(
+                store_uri=args.store,
+                slice_id=args.slice_id,
+                session=args.session,
+                run_id=args.run_id,
+                task_instance_key=args.task_instance_key,
+                task_template_hash=args.task_template_hash,
+                min_quality_confidence=args.min_quality_confidence,
+                min_verifier_score=args.min_verifier_score,
+                source_channel=args.source_channel,
+                limit=args.limit,
+            )
+            payload = {
+                "slice": slice_record.to_dict(),
+                "candidate_count": len(candidates),
+                "candidates": [candidate.to_dict() for candidate in candidates],
+            }
+            _print_output(payload if args.json else _render_candidate_pool(slice_record, candidates))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "cohort" and args.cohort_command == "freeze":
+        try:
+            result = freeze_cohort(
+                store_uri=args.store,
+                slice_id=args.slice_id,
+                name=args.name,
+                cohort_id=args.cohort_id,
+                session=args.session,
+                run_id=args.run_id,
+                task_instance_key=args.task_instance_key,
+                task_template_hash=args.task_template_hash,
+                min_quality_confidence=args.min_quality_confidence,
+                min_verifier_score=args.min_verifier_score,
+                source_channel=args.source_channel,
+                limit=args.limit,
+            )
+            _print_output(
+                result.to_dict()
+                if args.json
+                else _render_cohort_freeze_result(result)
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "cohort" and args.cohort_command == "list":
+        store = SQLiteFactStore(args.store)
+        cohorts = store.list_cohorts(slice_id=args.slice_id, status=args.status)
+        _print_output(
+            [cohort.to_dict() for cohort in cohorts]
+            if args.json
+            else _render_cohort_list(cohorts)
+        )
+        return 0
+
+    if args.command == "cohort" and args.cohort_command == "show":
+        try:
+            store = SQLiteFactStore(args.store)
+            cohort = store.get_cohort(args.cohort_id)
+            if cohort is None:
+                raise ValueError(f"cohort not found: {args.cohort_id}")
+            members = store.list_cohort_members(args.cohort_id)
+            payload = {
+                "cohort": cohort.to_dict(),
+                "members": [member.to_dict() for member in members],
+            }
+            _print_output(payload if args.json else _render_cohort_detail(cohort, members))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         return 0
 
     if args.command == "replay":
@@ -1000,6 +1194,7 @@ def main(argv: list[str] | None = None) -> int:
                 session=args.session,
                 run_id=args.run_id,
                 out=args.out,
+                cohort_id=args.cohort_id,
             )
             if args.dry_run:
                 _print_output(plan.to_dict() if args.json else _render_export_plan(plan))
@@ -1012,11 +1207,15 @@ def main(argv: list[str] | None = None) -> int:
                 session=args.session,
                 run_id=args.run_id,
                 out=args.out,
+                cohort_id=args.cohort_id,
             )
             _print_output(
                 {
                     "builder": plan.builder,
                     "run_id": plan.run_id,
+                    "cohort_id": plan.cohort_id,
+                    "dataset_recipe_id": plan.dataset_recipe_id,
+                    "dataset_snapshot_id": plan.dataset_snapshot_id,
                     "record_count": count,
                     "output_path": str(args.out),
                     "manifest_path": str(args.out.with_name(f"{args.out.name}.manifest.json")),
@@ -1239,11 +1438,114 @@ def _render_readiness_list(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _render_slice_record(slice_record) -> str:
+    lines = [
+        f"Slice: {slice_record.slice_id}",
+        f"Family: {slice_record.task_family}",
+        f"Type: {slice_record.task_type}",
+        f"Taxonomy: {slice_record.taxonomy_version}",
+        f"Sample unit: {slice_record.sample_unit}",
+        f"Default use: {slice_record.default_use}",
+        f"Risk: {slice_record.risk_level}",
+        f"Owner: {slice_record.owner}",
+        f"Verifier contract: {slice_record.verifier_contract}",
+    ]
+    if slice_record.description:
+        lines.append(f"Description: {slice_record.description}")
+    return "\n".join(lines)
+
+
+def _render_slice_list(slice_records: list) -> str:
+    if not slice_records:
+        return "No slices found."
+    lines = [f"Slices: {len(slice_records)}", ""]
+    for slice_record in slice_records:
+        lines.append(
+            f"{slice_record.slice_id} family={slice_record.task_family} "
+            f"type={slice_record.task_type} taxonomy={slice_record.taxonomy_version} "
+            f"use={slice_record.default_use}"
+        )
+    return "\n".join(lines)
+
+
+def _render_candidate_pool(slice_record, candidates: list) -> str:
+    lines = [
+        f"Slice: {slice_record.slice_id}",
+        f"Candidates: {len(candidates)}",
+        "",
+    ]
+    for candidate in candidates:
+        lines.append(
+            f"{candidate.run_id} session={candidate.session_id} "
+            f"instance={candidate.task_instance_key} template={candidate.task_template_hash} "
+            f"quality={candidate.quality_confidence} verifier={candidate.verifier_score} "
+            f"source={candidate.source_channel}"
+        )
+    return "\n".join(lines)
+
+
+def _render_cohort_freeze_result(result) -> str:
+    manifest = result.cohort.manifest
+    lines = [
+        f"Cohort: {result.cohort.cohort_id}",
+        f"Name: {result.cohort.name}",
+        f"Slice: {result.slice_record.slice_id}",
+        f"Members: {len(result.members)}",
+        (
+            f"Coverage: sessions={manifest['coverage']['session_count']} "
+            f"runs={manifest['coverage']['run_count']} "
+            f"task_instances={manifest['coverage']['task_instance_count']} "
+            f"templates={manifest['coverage']['task_template_count']}"
+        ),
+        (
+            f"Quality: q=[{manifest['quality']['min_quality_confidence']}, "
+            f"{manifest['quality']['max_quality_confidence']}] "
+            f"verifier=[{manifest['quality']['min_verifier_score']}, "
+            f"{manifest['quality']['max_verifier_score']}]"
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def _render_cohort_list(cohorts: list) -> str:
+    if not cohorts:
+        return "No cohorts found."
+    lines = [f"Cohorts: {len(cohorts)}", ""]
+    for cohort in cohorts:
+        lines.append(
+            f"{cohort.cohort_id} name={cohort.name} status={cohort.status} "
+            f"slices={','.join(cohort.slice_ids)} "
+            f"runs={cohort.manifest.get('coverage', {}).get('run_count', 0)}"
+        )
+    return "\n".join(lines)
+
+
+def _render_cohort_detail(cohort, members: list) -> str:
+    lines = [
+        f"Cohort: {cohort.cohort_id}",
+        f"Name: {cohort.name}",
+        f"Status: {cohort.status}",
+        f"Slices: {', '.join(cohort.slice_ids)}",
+        f"Members: {len(members)}",
+        "",
+    ]
+    for member in members:
+        lines.append(
+            f"{member.run_id} session={member.session_id} slice={member.slice_id} "
+            f"instance={member.task_instance_key} quality={member.quality_confidence} "
+            f"verifier={member.verifier_score}"
+        )
+    return "\n".join(lines)
+
+
 def _render_export_plan(plan) -> str:
     lines = [
         f"Builder: {plan.builder}",
         f"Session: {plan.session_id}",
         f"Run: {plan.run_id or '<all>'}",
+        f"Cohort: {plan.cohort_id or '<none>'}",
+        f"Dataset recipe: {plan.dataset_recipe_id}",
+        f"Dataset snapshot: {plan.dataset_snapshot_id}",
         f"Ready: {plan.ready}",
         f"Predicted records: {plan.record_count}",
         f"Output path: {plan.output_path or '<not set>'}",

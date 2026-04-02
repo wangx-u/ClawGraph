@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
+from clawgraph.artifacts import annotate_records_with_e1, summarize_e1_annotations
 from clawgraph.builders import BuildContext, get_dataset_builder, register_dataset_builder
 from clawgraph.graph import (
     build_branch_inspect_summaries,
@@ -16,7 +19,8 @@ from clawgraph.graph import (
     infer_branches,
     partition_facts_by_run,
 )
-from clawgraph.protocol.models import ArtifactRecord, FactEvent
+from clawgraph.protocol.factories import new_dataset_snapshot_record
+from clawgraph.protocol.models import ArtifactRecord, CohortMemberRecord, CohortRecord, FactEvent
 from clawgraph.protocol.semantics import extract_prompt_messages
 from clawgraph.store import SQLiteFactStore
 
@@ -43,6 +47,9 @@ class ExportPlan:
     builder: str
     session_id: str
     run_id: str | None
+    cohort_id: str | None
+    dataset_recipe_id: str
+    dataset_snapshot_id: str
     output_path: str | None
     record_count: int
     blockers: list[str]
@@ -169,6 +176,7 @@ def _build_branch_records_by_key(
 
     branch_summaries = build_branch_inspect_summaries(facts)
     request_records_by_fact_id = _build_request_records_by_fact_id(facts)
+    run_session_map = _run_session_map(facts)
     branch_records: dict[tuple[str, str], dict[str, Any]] = {}
 
     for branch in branch_summaries:
@@ -178,7 +186,7 @@ def _build_branch_records_by_key(
             if request_fact_id in request_records_by_fact_id
         ]
         branch_records[(branch.run_id, branch.branch_id)] = {
-            "session_id": facts[0].session_id,
+            "session_id": run_session_map.get(branch.run_id),
             "run_id": branch.run_id,
             "branch_id": branch.branch_id,
             "branch_type": branch.branch_type,
@@ -366,15 +374,265 @@ def _build_context(
     if resolved_run_id is None:
         run_ids = sorted({fact.run_id for fact in facts})
         resolved_run_id = run_ids[0] if len(run_ids) == 1 else None
+    resolved_session_id = _single_session_id(facts)
     return BuildContext(
-        session_id=facts[0].session_id if facts else None,
+        session_id=resolved_session_id,
         run_id=resolved_run_id,
         selection_query={
             "builder": builder,
-            "session_id": facts[0].session_id if facts else None,
+            "session_id": resolved_session_id,
             "run_id": resolved_run_id,
         },
     )
+
+
+def _sample_unit_for_builder(builder: str) -> str:
+    if builder == "sft":
+        return "request"
+    if builder == "preference":
+        return "branch"
+    if builder == "binary_rl":
+        return "run"
+    return "fact"
+
+
+def _dataset_recipe_id(builder: str) -> str:
+    return f"clawgraph.recipe.{builder}.v1"
+
+
+def _fallback_split_guard_key(record: dict[str, Any]) -> str:
+    for key in ("task_instance_key", "run_id", "session_id", "request_id", "fact_id"):
+        value = record.get(key)
+        if isinstance(value, str) and value:
+            return f"{key}:{value}"
+    target = record.get("target")
+    if isinstance(target, dict):
+        for key in ("run_id", "branch_id", "fact_id", "target_ref"):
+            value = target.get(key)
+            if isinstance(value, str) and value:
+                return f"target.{key}:{value}"
+    lineage = record.get("lineage")
+    if isinstance(lineage, dict):
+        for key in ("request_id", "artifact_id", "target_ref"):
+            value = lineage.get(key)
+            if isinstance(value, str) and value:
+                return f"lineage.{key}:{value}"
+    return hashlib.sha256(
+        json.dumps(record, ensure_ascii=True, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _hash_split(guard_key: str) -> str:
+    bucket = int(hashlib.sha256(guard_key.encode("utf-8")).hexdigest()[:8], 16) % 100
+    if bucket < 80:
+        return "train"
+    if bucket < 90:
+        return "val"
+    return "test"
+
+
+def _canonical_record_hash(record: dict[str, Any]) -> str:
+    canonical = {
+        "builder": record.get("lineage", {}).get("builder"),
+        "task_type": record.get("task_type"),
+        "task_instance_key": record.get("task_instance_key"),
+        "task_template_hash": record.get("annotation", {}).get("task_template_hash"),
+        "prompt": record.get("prompt"),
+        "messages": record.get("messages"),
+        "completion": record.get("completion"),
+        "chosen": record.get("chosen"),
+        "rejected": record.get("rejected"),
+        "target": record.get("target"),
+        "reward": record.get("reward"),
+    }
+    return hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=True, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _dedupe_records(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    duplicates_removed = 0
+    near_duplicate_clusters = _distribution_from_records(
+        [record for record in records if isinstance(record.get("annotation"), dict)],
+        "task_template_hash",
+    )
+    for record in records:
+        canonical_hash = _canonical_record_hash(record)
+        if canonical_hash in seen:
+            duplicates_removed += 1
+            continue
+        seen.add(canonical_hash)
+        record_copy = dict(record)
+        record_copy["canonical_record_hash"] = canonical_hash
+        deduped.append(record_copy)
+    return deduped, {
+        "rule_version": "clawgraph.exact_dedupe.v1",
+        "input_records": len(records),
+        "output_records": len(deduped),
+        "duplicates_removed": duplicates_removed,
+        "near_duplicate_cluster_key": "task_template_hash",
+        "near_duplicate_clusters": near_duplicate_clusters,
+    }
+
+
+def _run_time_range(facts: list[FactEvent]) -> dict[str, tuple[str, str]]:
+    per_run: dict[str, list[str]] = {}
+    for fact in facts:
+        per_run.setdefault(fact.run_id, []).append(fact.timestamp.isoformat())
+    return {
+        run_id: (min(timestamps), max(timestamps))
+        for run_id, timestamps in per_run.items()
+        if timestamps
+    }
+
+
+def _cohort_split_assignments(
+    *,
+    members: list[CohortMemberRecord],
+    facts: list[FactEvent],
+) -> tuple[dict[str, tuple[str, str]], dict[str, Any]]:
+    run_time_bounds = _run_time_range(facts)
+    strata: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    for member in members:
+        task_type = str(member.metadata.get("task_type") or "unknown")
+        stratum_key = (member.slice_id, task_type)
+        instance_key = member.task_instance_key
+        instance_group = strata.setdefault(stratum_key, {}).setdefault(
+            instance_key,
+            {
+                "task_instance_key": instance_key,
+                "run_ids": [],
+                "latest_timestamp": run_time_bounds.get(member.run_id, ("", ""))[1],
+            },
+        )
+        instance_group["run_ids"].append(member.run_id)
+        latest = run_time_bounds.get(member.run_id, ("", ""))[1]
+        if latest > instance_group["latest_timestamp"]:
+            instance_group["latest_timestamp"] = latest
+
+    assignments: dict[str, tuple[str, str]] = {}
+    split_counts = {"train": 0, "val": 0, "test": 0}
+    leakage_keys: set[str] = set()
+    temporal_strata: list[dict[str, Any]] = []
+    for stratum_key, instance_groups in strata.items():
+        ordered_groups = sorted(
+            instance_groups.values(),
+            key=lambda group: (group["latest_timestamp"], group["task_instance_key"]),
+        )
+        if len(ordered_groups) >= 10:
+            test_count = max(1, round(len(ordered_groups) * 0.1))
+            val_count = max(1, round(len(ordered_groups) * 0.1))
+            train_cutoff = len(ordered_groups) - test_count - val_count
+            for index, group in enumerate(ordered_groups):
+                if index < train_cutoff:
+                    split = "train"
+                elif index < len(ordered_groups) - test_count:
+                    split = "val"
+                else:
+                    split = "test"
+                for run_id in group["run_ids"]:
+                    assignments[run_id] = (split, group["task_instance_key"])
+                    split_counts[split] += 1
+                leakage_keys.add(group["task_instance_key"])
+            temporal_strata.append(
+                {
+                    "slice_id": stratum_key[0],
+                    "task_type": stratum_key[1],
+                    "assignment_mode": "time_window",
+                    "group_count": len(ordered_groups),
+                }
+            )
+            continue
+
+        for group in ordered_groups:
+            split = _hash_split(group["task_instance_key"])
+            for run_id in group["run_ids"]:
+                assignments[run_id] = (split, group["task_instance_key"])
+                split_counts[split] += 1
+            leakage_keys.add(group["task_instance_key"])
+        temporal_strata.append(
+            {
+                "slice_id": stratum_key[0],
+                "task_type": stratum_key[1],
+                "assignment_mode": "hash_fallback",
+                "group_count": len(ordered_groups),
+            }
+        )
+    return assignments, {
+        "rule_version": "clawgraph.cohort_split.v1",
+        "distinct_guard_keys": len(leakage_keys),
+        "counts": split_counts,
+        "strata": temporal_strata,
+    }
+
+
+def _annotate_records_with_dataset_context(
+    *,
+    records: list[dict[str, Any]],
+    builder: str,
+    dataset_recipe_id: str,
+    dataset_snapshot_id: str,
+    cohort_id: str | None,
+    cohort_members: list[CohortMemberRecord] | None = None,
+    facts: list[FactEvent] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    split_counts = {"train": 0, "val": 0, "test": 0}
+    guard_keys: set[str] = set()
+    cohort_assignments: dict[str, tuple[str, str]] = {}
+    split_metadata = {
+        "rule_version": "clawgraph.hash_split.v1",
+        "distinct_guard_keys": 0,
+        "counts": split_counts,
+        "strata": [],
+    }
+    if cohort_members is not None and facts is not None:
+        cohort_assignments, split_manifest = _cohort_split_assignments(
+            members=cohort_members,
+            facts=facts,
+        )
+        split_metadata = split_manifest
+        guard_keys = {
+            assignment[1] for assignment in cohort_assignments.values()
+        }
+    annotated: list[dict[str, Any]] = []
+    for record in records:
+        run_id = _record_run_id(record)
+        if run_id is not None and run_id in cohort_assignments:
+            split, guard_key = cohort_assignments[run_id]
+        else:
+            guard_key = _fallback_split_guard_key(record)
+            split = _hash_split(guard_key)
+            guard_keys.add(guard_key)
+        record_copy = dict(record)
+        record_copy["split"] = split
+        record_copy["split_guard_key"] = guard_key
+        record_copy["dataset_recipe_id"] = dataset_recipe_id
+        record_copy["dataset_snapshot_id"] = dataset_snapshot_id
+        if cohort_id is not None:
+            record_copy["cohort_id"] = cohort_id
+        annotated.append(record_copy)
+        split_counts[split] += 1
+    split_metadata["counts"] = split_counts
+    split_metadata["distinct_guard_keys"] = len(guard_keys)
+    return annotated, split_metadata
+
+
+def _distribution_from_records(records: list[dict[str, Any]], key: str) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    for record in records:
+        value = record.get(key)
+        if value is None:
+            annotation = record.get("annotation")
+            if isinstance(annotation, dict):
+                value = annotation.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        distribution[value] = distribution.get(value, 0) + 1
+    return distribution
 
 
 def build_records_for_builder(
@@ -387,26 +645,109 @@ def build_records_for_builder(
 
     _ensure_builtin_builders_registered()
     builder_impl = get_dataset_builder(builder)
-    return list(
+    records = list(
         builder_impl.build_records(
             facts=facts,
             artifacts=artifacts,
             context=_build_context(facts=facts, builder=builder_impl.name),
         )
     )
+    return annotate_records_with_e1(records=records, facts=facts, artifacts=artifacts)
+
+
+def _load_cohort_scope(
+    *,
+    store: SQLiteFactStore,
+    cohort_id: str,
+) -> tuple[CohortRecord, list[CohortMemberRecord], list[FactEvent], list[ArtifactRecord]]:
+    cohort = store.get_cohort(cohort_id)
+    if cohort is None:
+        raise ValueError(f"cohort not found: {cohort_id}")
+    members = store.list_cohort_members(cohort_id)
+    if not members:
+        raise ValueError(f"cohort has no members: {cohort_id}")
+
+    run_ids = {member.run_id for member in members}
+    session_ids = {member.session_id for member in members}
+    facts: list[FactEvent] = []
+    for run_id in sorted(run_ids):
+        facts.extend(store.list_facts(run_id=run_id))
+    if not facts:
+        raise ValueError(f"no facts found for cohort: {cohort_id}")
+    facts.sort(key=lambda fact: (fact.timestamp, fact.fact_id))
+    frozen_artifact_ids = sorted(
+        {
+            artifact_id
+            for member in members
+            for artifact_id in member.metadata.get("frozen_artifact_ids", [])
+            if isinstance(artifact_id, str) and artifact_id
+        }
+    )
+    if frozen_artifact_ids:
+        artifacts = store.list_artifacts(artifact_ids=frozen_artifact_ids)
+        return cohort, members, facts, artifacts
+
+    fact_ids = {fact.fact_id for fact in facts}
+    branch_ids = {
+        summary.branch_id
+        for summary in build_branch_inspect_summaries(facts)
+        if isinstance(summary.branch_id, str) and summary.branch_id
+    }
+    candidate_artifacts: list[ArtifactRecord] = []
+    for session_id in sorted(session_ids):
+        candidate_artifacts.extend(
+            store.list_artifacts(session_id=session_id, latest_only=False)
+        )
+    seen_artifact_ids: set[str] = set()
+    artifacts: list[ArtifactRecord] = []
+    for artifact in candidate_artifacts:
+        if artifact.artifact_id in seen_artifact_ids:
+            continue
+        if cohort.created_at is not None and artifact.created_at is not None:
+            if artifact.created_at > cohort.created_at:
+                continue
+        if not _artifact_in_scope(
+            artifact=artifact,
+            run_ids=run_ids,
+            session_ids=session_ids,
+            fact_ids=fact_ids,
+            branch_ids=branch_ids,
+        ):
+            continue
+        artifacts.append(artifact)
+        seen_artifact_ids.add(artifact.artifact_id)
+    return cohort, members, facts, artifacts
 
 
 def plan_dataset_export(
     *,
     store_uri: str,
     builder: str,
-    session: str,
+    session: str = "latest",
     run_id: str | None = None,
     out: Path | None = None,
+    cohort_id: str | None = None,
 ) -> ExportPlan:
     """Plan an export and return predicted records plus manifest metadata."""
 
     store = SQLiteFactStore(store_uri)
+    if cohort_id is not None:
+        cohort, cohort_members, facts, artifacts = _load_cohort_scope(
+            store=store,
+            cohort_id=cohort_id,
+        )
+        return plan_dataset_export_for_scope(
+            builder=builder,
+            facts=facts,
+            artifacts=artifacts,
+            out=out,
+            run_id=None,
+            session_id=f"cohort:{cohort_id}",
+            cohort_id=cohort_id,
+            cohort=cohort,
+            cohort_members=cohort_members,
+            legacy_scope=False,
+        )
     resolved_run_id = run_id
     resolved_session_id: str | None
     if resolved_run_id is not None:
@@ -439,6 +780,8 @@ def plan_dataset_export(
         artifacts=artifacts,
         out=out,
         run_id=resolved_run_id,
+        session_id=resolved_session_id,
+        legacy_scope=True,
     )
 
 
@@ -449,18 +792,35 @@ def plan_dataset_export_for_scope(
     artifacts: list[ArtifactRecord],
     out: Path | None = None,
     run_id: str | None = None,
+    session_id: str | None = None,
+    cohort_id: str | None = None,
+    cohort: CohortRecord | None = None,
+    cohort_members: list[CohortMemberRecord] | None = None,
+    legacy_scope: bool = False,
 ) -> ExportPlan:
     """Plan an export directly from facts and artifacts already loaded in memory."""
 
     if not facts:
         raise ValueError("no facts found in scope")
-    session_id = facts[0].session_id
+    effective_session_id = session_id or facts[0].session_id
     _ensure_builtin_builders_registered()
     builder_impl = get_dataset_builder(builder)
-    records = build_records_for_builder(
+    dataset_recipe_id = _dataset_recipe_id(builder_impl.name)
+    dataset_snapshot_id = f"ds_{uuid4().hex}"
+    raw_records = build_records_for_builder(
         builder=builder_impl.name,
         facts=facts,
         artifacts=artifacts,
+    )
+    records, dedupe_manifest = _dedupe_records(raw_records)
+    records, split_manifest = _annotate_records_with_dataset_context(
+        records=records,
+        builder=builder_impl.name,
+        dataset_recipe_id=dataset_recipe_id,
+        dataset_snapshot_id=dataset_snapshot_id,
+        cohort_id=cohort_id,
+        cohort_members=cohort_members,
+        facts=facts,
     )
     blockers = _blockers_for_builder(
         builder=builder_impl.name,
@@ -469,20 +829,40 @@ def plan_dataset_export_for_scope(
         records=records,
         run_id=run_id,
     )
+    blockers.extend(
+        _scope_contract_blockers(
+            builder=builder_impl.name,
+            cohort=cohort,
+            cohort_members=cohort_members,
+            legacy_scope=legacy_scope,
+        )
+    )
     manifest = _build_manifest(
         builder=builder_impl.name,
-        session_id=session_id,
+        session_id=effective_session_id,
         facts=facts,
         artifacts=artifacts,
         record_count=len(records),
         blockers=blockers,
         output_path=out,
         run_id=run_id,
+        cohort_id=cohort_id,
+        dataset_recipe_id=dataset_recipe_id,
+        dataset_snapshot_id=dataset_snapshot_id,
+        sample_unit=_sample_unit_for_builder(builder_impl.name),
+        split_manifest=split_manifest,
+        dedupe_manifest=dedupe_manifest,
+        records=records,
+        cohort=cohort,
+        legacy_scope=legacy_scope,
     )
     return ExportPlan(
         builder=builder_impl.name,
-        session_id=facts[0].session_id,
+        session_id=effective_session_id,
         run_id=run_id,
+        cohort_id=cohort_id,
+        dataset_recipe_id=dataset_recipe_id,
+        dataset_snapshot_id=dataset_snapshot_id,
         output_path=str(out) if out is not None else None,
         record_count=len(records),
         blockers=blockers,
@@ -495,9 +875,10 @@ def export_dataset(
     *,
     store_uri: str,
     builder: str,
-    session: str,
+    session: str = "latest",
     out: Path,
     run_id: str | None = None,
+    cohort_id: str | None = None,
 ) -> int:
     """Export a dataset from the stored facts and artifacts for a session."""
 
@@ -507,6 +888,7 @@ def export_dataset(
         session=session,
         run_id=run_id,
         out=out,
+        cohort_id=cohort_id,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as handle:
@@ -518,6 +900,23 @@ def export_dataset(
     manifest_path.write_text(
         json.dumps(plan.manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+    )
+    store = SQLiteFactStore(store_uri)
+    store.append_dataset_snapshot(
+        new_dataset_snapshot_record(
+            dataset_snapshot_id=plan.dataset_snapshot_id,
+            dataset_recipe_id=plan.dataset_recipe_id,
+            builder=plan.builder,
+            sample_unit=plan.manifest["sample_unit"],
+            cohort_id=plan.cohort_id,
+            output_path=str(out),
+            record_count=plan.record_count,
+            manifest=plan.manifest,
+            metadata={
+                "session_id": plan.session_id,
+                "run_id": plan.run_id,
+            },
+        )
     )
     return plan.record_count
 
@@ -632,6 +1031,7 @@ def _build_binary_rl(
     facts_by_id = {fact.fact_id: fact for fact in facts}
     request_records_by_fact_id = _build_request_records_by_fact_id(facts)
     _, branch_records_by_key = _build_branch_records_by_key(facts)
+    run_session_map = _run_session_map(facts)
     run_records = _build_run_records(
         facts,
         request_records_by_fact_id=request_records_by_fact_id,
@@ -720,7 +1120,9 @@ def _build_binary_rl(
 
         records.append(
             {
-                "session_id": facts[0].session_id,
+                "session_id": artifact.session_id
+                or (run_session_map.get(artifact.run_id) if artifact.run_id is not None else None)
+                or _single_session_id(facts),
                 "run_id": artifact.run_id,
                 "target": target,
                 "reward": reward,
@@ -774,32 +1176,46 @@ def _builtin_blockers_for_builder(
     artifacts: list[ArtifactRecord],
     records: list[dict[str, Any]],
 ) -> list[str]:
+    blockers: list[str] = []
+    if builder in {"sft", "preference", "binary_rl"}:
+        annotation_summary = summarize_e1_annotations(facts=facts, artifacts=artifacts)
+        for run_id, run_summary in annotation_summary["runs"].items():
+            if run_summary["missing_fields"]:
+                blockers.append(
+                    f"run {run_id} missing E1 annotations: {', '.join(run_summary['missing_fields'])}"
+                )
     if builder == "facts":
         return [] if facts else ["no facts found"]
     if builder == "sft":
-        return [] if records else ["no successful model response pairs found for SFT"]
+        if not records:
+            blockers.append("no successful model response pairs found for SFT")
+        return blockers
     if builder == "preference":
         active_preference_artifacts = [
             artifact
             for artifact in artifacts
             if artifact.status == "active" and artifact.artifact_type in _PREFERENCE_ARTIFACT_TYPES
         ]
-        if records:
+        if records and not blockers:
             return []
         if active_preference_artifacts:
-            return ["active preference artifacts did not resolve to known branches"]
-        return ["no active preference artifacts or comparable related branch pairs found"]
+            blockers.append("active preference artifacts did not resolve to known branches")
+            return blockers
+        blockers.append("no active preference artifacts or comparable related branch pairs found")
+        return blockers
     if builder == "binary_rl":
         active_binary_rl_artifacts = [
             artifact
             for artifact in artifacts
             if artifact.status == "active" and artifact.artifact_type in _BINARY_RL_ARTIFACT_TYPES
         ]
-        if records:
+        if records and not blockers:
             return []
         if active_binary_rl_artifacts:
-            return ["active binary RL artifacts did not contain numeric rewards"]
-        return ["no active score/reward artifacts found for binary RL"]
+            blockers.append("active binary RL artifacts did not contain numeric rewards")
+            return blockers
+        blockers.append("no active score/reward artifacts found for binary RL")
+        return blockers
     raise ValueError(f"unsupported builder: {builder}")
 
 
@@ -997,8 +1413,134 @@ def _split_target_ref(target_ref: str) -> tuple[str | None, str]:
     return prefix, value
 
 
+def _artifact_in_scope(
+    *,
+    artifact: ArtifactRecord,
+    run_ids: set[str],
+    session_ids: set[str],
+    fact_ids: set[str],
+    branch_ids: set[str],
+) -> bool:
+    if artifact.run_id is not None and artifact.run_id in run_ids:
+        return True
+    target_type, target_id = _split_target_ref(artifact.target_ref)
+    if target_type == "run":
+        return target_id in run_ids
+    if target_type == "session":
+        return target_id in session_ids
+    if target_type == "fact":
+        return target_id in fact_ids
+    if target_type == "branch":
+        return target_id in branch_ids or (
+            artifact.run_id is not None and artifact.run_id in run_ids
+        )
+    if target_type is None and artifact.session_id is not None:
+        return artifact.session_id in session_ids
+    return False
+
+
 def _manifest_path(out: Path) -> Path:
     return out.with_name(f"{out.name}.manifest.json")
+
+
+def _single_session_id(facts: list[FactEvent]) -> str | None:
+    session_ids = sorted({fact.session_id for fact in facts})
+    return session_ids[0] if len(session_ids) == 1 else None
+
+
+def _run_session_map(facts: list[FactEvent]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for fact in facts:
+        mapping.setdefault(fact.run_id, fact.session_id)
+    return mapping
+
+
+def _record_run_id(record: dict[str, Any]) -> str | None:
+    value = record.get("run_id")
+    if isinstance(value, str) and value:
+        return value
+    target = record.get("target")
+    if isinstance(target, dict):
+        target_run_id = target.get("run_id")
+        if isinstance(target_run_id, str) and target_run_id:
+            return target_run_id
+    return None
+
+
+def _scope_contract_blockers(
+    *,
+    builder: str,
+    cohort: CohortRecord | None,
+    cohort_members: list[CohortMemberRecord] | None,
+    legacy_scope: bool,
+) -> list[str]:
+    del cohort_members, legacy_scope
+    if cohort is None:
+        return []
+
+    blockers: list[str] = []
+    review = cohort.manifest.get("review")
+    if isinstance(review, dict) and review.get("required") is True:
+        blockers.append("cohort has pending review queue items")
+
+    expected_use = str(cohort.manifest.get("expected_use") or "training")
+    if builder != "facts" and expected_use != "training":
+        blockers.append(
+            f"cohort expected_use={expected_use} is not exportable as a training dataset snapshot"
+        )
+
+    cohort_sample_unit = cohort.manifest.get("sample_unit")
+    if isinstance(cohort_sample_unit, str) and cohort_sample_unit:
+        builder_sample_unit = _sample_unit_for_builder(builder)
+        if not _builder_sample_unit_is_compatible(
+            builder=builder,
+            builder_sample_unit=builder_sample_unit,
+            cohort_sample_unit=cohort_sample_unit,
+        ):
+            blockers.append(
+                "builder sample_unit is incompatible with cohort slice contract: "
+                f"builder={builder_sample_unit}, cohort={cohort_sample_unit}"
+            )
+    return blockers
+
+
+def _builder_sample_unit_is_compatible(
+    *,
+    builder: str,
+    builder_sample_unit: str,
+    cohort_sample_unit: str,
+) -> bool:
+    if builder == "facts":
+        return True
+    compatibility = {
+        "sft": {"request", "run"},
+        "preference": {"branch"},
+        "binary_rl": {"run"},
+    }
+    allowed = compatibility.get(builder, {builder_sample_unit})
+    return cohort_sample_unit in allowed
+
+
+def _facts_time_range(facts: list[FactEvent]) -> dict[str, str | None]:
+    if not facts:
+        return {"start": None, "end": None}
+    ordered = sorted(fact.timestamp.isoformat() for fact in facts)
+    return {"start": ordered[0], "end": ordered[-1]}
+
+
+def _unique_annotation_values(records: list[dict[str, Any]], key: str) -> list[str]:
+    values = {
+        value
+        for record in records
+        for value in [
+            record.get(key),
+            record.get("annotation", {}).get(key)
+            if isinstance(record.get("annotation"), dict)
+            else None,
+        ]
+        if isinstance(value, str) and value
+    }
+    return sorted(values)
 
 
 def _request_input_messages(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -1021,20 +1563,113 @@ def _build_manifest(
     blockers: list[str],
     output_path: Path | None,
     run_id: str | None,
+    cohort_id: str | None,
+    dataset_recipe_id: str,
+    dataset_snapshot_id: str,
+    sample_unit: str,
+    split_manifest: dict[str, Any],
+    dedupe_manifest: dict[str, Any],
+    records: list[dict[str, Any]],
+    cohort: CohortRecord | None,
+    legacy_scope: bool,
 ) -> dict[str, Any]:
+    annotation_summary = summarize_e1_annotations(facts=facts, artifacts=artifacts)
+    split_guard_keys = sorted(
+        {
+            value
+            for record in records
+            for value in [record.get("split_guard_key")]
+            if isinstance(value, str) and value
+        }
+    )
+    leakage_guard = {
+        "primary": "task_instance_key",
+        "fallbacks": ["run_id", "session_id", "request_id", "fact_id"],
+        "fallback_used": any(
+            not guard_key.startswith("task_instance_key:")
+            for guard_key in split_guard_keys
+        ),
+        "guard_keys": split_guard_keys,
+    }
+    scope_mode = "legacy_preview" if legacy_scope else "cohort"
     return {
+        "dataset_snapshot_id": dataset_snapshot_id,
+        "dataset_recipe_id": dataset_recipe_id,
         "builder": builder,
+        "sample_unit": sample_unit,
         "created_at": datetime.now(UTC).isoformat(),
+        "cohort_id": cohort_id,
         "session_id": session_id,
         "run_id": run_id,
+        "scope": {
+            "mode": scope_mode,
+            "legacy_preview": legacy_scope,
+            "cohort_id": cohort_id,
+        },
         "record_count": record_count,
         "ready": not blockers and record_count > 0,
         "blockers": blockers,
         "output_path": str(output_path) if output_path is not None else None,
         "source_run_ids": sorted({fact.run_id for fact in facts}),
+        "source_session_ids": sorted({fact.session_id for fact in facts}),
+        "task_instance_keys": _unique_annotation_values(records, "task_instance_key"),
+        "task_template_hashes": _unique_annotation_values(records, "task_template_hash"),
+        "taxonomy_versions": _unique_annotation_values(records, "taxonomy_version"),
+        "time_range": _facts_time_range(facts),
         "fact_count": len(facts),
         "artifact_count": len(artifacts),
         "artifact_ids": [artifact.artifact_id for artifact in artifacts],
+        "split": {
+            **split_manifest,
+            "guard_key_priority": [
+                "task_instance_key",
+                "run_id",
+                "session_id",
+                "request_id",
+                "fact_id",
+            ],
+            "leakage_guard": leakage_guard,
+        },
+        "dedupe": dedupe_manifest,
+        "distributions": {
+            "task_family": _distribution_from_records(records, "task_family"),
+            "task_type": _distribution_from_records(records, "task_type"),
+            "task_template_hash": _distribution_from_records(records, "task_template_hash"),
+            "difficulty": _distribution_from_records(records, "difficulty"),
+            "teacher_model": _distribution_from_records(records, "teacher_model"),
+            "verifier_name": _distribution_from_records(records, "verifier_name"),
+            "source_channel": _distribution_from_records(records, "source_channel"),
+            "split": _distribution_from_records(records, "split"),
+        },
+        "artifact_view": (
+            cohort.manifest.get("artifact_view")
+            if cohort is not None and isinstance(cohort.manifest.get("artifact_view"), dict)
+            else {
+                "strategy": "latest_only"
+                if legacy_scope
+                else "historical_replay_before_cohort_created_at"
+            }
+        ),
+        "cohort_contract": (
+            {
+                "expected_use": cohort.manifest.get("expected_use"),
+                "review": cohort.manifest.get("review"),
+                "quality_gate": cohort.manifest.get("quality", {}).get("quality_gate"),
+                "selection_query": cohort.manifest.get("selection_query"),
+            }
+            if cohort is not None
+            else None
+        ),
+        "evidence": {
+            "level": annotation_summary["level"],
+            "ready": annotation_summary["ready"],
+            "annotation_artifacts": annotation_summary["annotation_artifacts"],
+            "annotated_runs": annotation_summary["annotated_runs"],
+            "run_count": annotation_summary["run_count"],
+            "required_fields": annotation_summary["required_fields"],
+            "artifact_ids": annotation_summary["artifact_ids"],
+            "runs": annotation_summary["runs"],
+        },
     }
 
 

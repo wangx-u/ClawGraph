@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from clawgraph.artifacts.annotations import build_e1_annotation_artifacts
 from clawgraph.graph import (
     build_branch_inspect_summaries,
     build_comparable_branch_pairs,
@@ -18,6 +19,7 @@ from clawgraph.protocol.models import ArtifactRecord, FactEvent
 SUPPORTED_ARTIFACT_TEMPLATES = (
     "request-outcome-scores",
     "branch-outcome-preference",
+    "e1-annotations",
     "openclaw-defaults",
 )
 
@@ -147,11 +149,27 @@ def _plan_artifact_bootstrap_for_run(
         elif template == "branch-outcome-preference":
             blockers.append("no comparable succeeded-versus-failed branches were found")
 
+    if template in {"e1-annotations", "openclaw-defaults"}:
+        annotation_artifacts = build_e1_annotation_artifacts(
+            facts=facts,
+            producer=producer,
+            version=version,
+            session_id=session_id,
+            run_id=run_id,
+            status=status,
+            template_name="e1-annotations",
+        )
+        if annotation_artifacts:
+            artifacts.extend(annotation_artifacts)
+        elif template == "e1-annotations":
+            blockers.append("no request_started facts were found to derive E1 annotations")
+
     if template == "openclaw-defaults" and not artifacts:
         blockers.extend(
             [
                 "no closed requests with response or error facts were found",
                 "no comparable succeeded-versus-failed branches were found",
+                "no request_started facts were found to derive E1 annotations",
             ]
         )
 

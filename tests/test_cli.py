@@ -8,8 +8,10 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from clawgraph.artifacts import E1_ANNOTATION_ARTIFACT_TYPE, E1_ANNOTATION_KIND
 from clawgraph.bootstrap import bootstrap_openclaw_session
-from clawgraph.protocol.factories import new_fact_event
+from clawgraph.curation import freeze_cohort
+from clawgraph.protocol.factories import new_artifact_record, new_fact_event, new_slice_record
 from clawgraph.cli.main import _load_facts_for_scope, _load_json_argument, _resolve_target_ref, main
 from clawgraph.proxy.payload_store import LocalPayloadStore
 from clawgraph.store import SQLiteFactStore
@@ -276,6 +278,326 @@ class CliHelpersTest(unittest.TestCase):
             payload = json.loads(buffer.getvalue())
             self.assertEqual(len(payload), 2)
             self.assertEqual({row["run_id"] for row in payload}, {"run_1", "run_2"})
+
+    def test_slice_register_and_candidates_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_uri = f"sqlite:///{Path(tempdir) / 'facts.db'}"
+            store = SQLiteFactStore(store_uri)
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {"messages": [{"role": "user", "content": "hi"}]},
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "status_code": 200,
+                    "json": {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+            annotation = new_artifact_record(
+                artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                target_ref="run:run_1",
+                producer="taxonomy-v1",
+                payload={
+                    "annotation_kind": E1_ANNOTATION_KIND,
+                    "task_family": "captured_agent_task",
+                    "task_type": "generic_proxy_capture",
+                    "task_template_hash": "tmpl_1",
+                    "task_instance_key": "task-1",
+                    "verifier_name": "judge-v1",
+                    "verifier_score": 0.8,
+                    "quality_confidence": 0.9,
+                    "taxonomy_version": "taxonomy.v1",
+                    "annotation_version": "e1.v1",
+                    "source_channel": "captured",
+                },
+                session_id="session_1",
+                run_id="run_1",
+                confidence=0.9,
+            )
+            store.append_facts([request, response])
+            store.append_artifact(annotation)
+
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "clawgraph",
+                    "slice",
+                    "register",
+                    "--store",
+                    store_uri,
+                    "--slice-id",
+                    "slice.capture",
+                    "--task-family",
+                    "captured_agent_task",
+                    "--task-type",
+                    "generic_proxy_capture",
+                    "--taxonomy-version",
+                    "taxonomy.v1",
+                    "--sample-unit",
+                    "run",
+                    "--verifier-contract",
+                    "judge-v1",
+                    "--risk-level",
+                    "medium",
+                    "--default-use",
+                    "training_candidate",
+                    "--owner",
+                    "ml-team",
+                    "--json",
+                ],
+            ), redirect_stdout(buffer):
+                return_code = main()
+
+            self.assertEqual(return_code, 0)
+            payload = json.loads(buffer.getvalue())
+            self.assertEqual(payload["slice_id"], "slice.capture")
+
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "clawgraph",
+                    "slice",
+                    "candidates",
+                    "--store",
+                    store_uri,
+                    "--slice-id",
+                    "slice.capture",
+                    "--min-quality-confidence",
+                    "0.8",
+                    "--json",
+                ],
+            ), redirect_stdout(buffer):
+                return_code = main()
+
+            self.assertEqual(return_code, 0)
+            payload = json.loads(buffer.getvalue())
+            self.assertEqual(payload["candidate_count"], 1)
+            self.assertEqual(payload["candidates"][0]["run_id"], "run_1")
+
+    def test_cohort_freeze_and_show_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_uri = f"sqlite:///{Path(tempdir) / 'facts.db'}"
+            store = SQLiteFactStore(store_uri)
+            store.put_slice(
+                new_slice_record(
+                    slice_id="slice.capture",
+                    task_family="captured_agent_task",
+                    task_type="generic_proxy_capture",
+                    taxonomy_version="taxonomy.v1",
+                    sample_unit="run",
+                    verifier_contract="judge-v1",
+                    risk_level="medium",
+                    default_use="training_candidate",
+                    owner="ml-team",
+                )
+            )
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {"messages": [{"role": "user", "content": "hi"}]},
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "status_code": 200,
+                    "json": {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+            store.append_facts([request, response])
+            store.append_artifact(
+                new_artifact_record(
+                    artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                    target_ref="run:run_1",
+                    producer="taxonomy-v1",
+                    payload={
+                        "annotation_kind": E1_ANNOTATION_KIND,
+                        "task_family": "captured_agent_task",
+                        "task_type": "generic_proxy_capture",
+                        "task_template_hash": "tmpl_1",
+                        "task_instance_key": "task-1",
+                        "verifier_name": "judge-v1",
+                        "verifier_score": 0.8,
+                        "quality_confidence": 0.9,
+                        "taxonomy_version": "taxonomy.v1",
+                        "annotation_version": "e1.v1",
+                        "source_channel": "captured",
+                    },
+                    session_id="session_1",
+                    run_id="run_1",
+                    confidence=0.9,
+                )
+            )
+
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "clawgraph",
+                    "cohort",
+                    "freeze",
+                    "--store",
+                    store_uri,
+                    "--slice-id",
+                    "slice.capture",
+                    "--name",
+                    "capture-train",
+                    "--json",
+                ],
+            ), redirect_stdout(buffer):
+                return_code = main()
+
+            self.assertEqual(return_code, 0)
+            payload = json.loads(buffer.getvalue())
+            cohort_id = payload["cohort"]["cohort_id"]
+            self.assertEqual(payload["cohort"]["name"], "capture-train")
+            self.assertEqual(len(payload["members"]), 1)
+
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "clawgraph",
+                    "cohort",
+                    "show",
+                    "--store",
+                    store_uri,
+                    "--cohort-id",
+                    cohort_id,
+                    "--json",
+                ],
+            ), redirect_stdout(buffer):
+                return_code = main()
+
+            self.assertEqual(return_code, 0)
+            payload = json.loads(buffer.getvalue())
+            self.assertEqual(payload["cohort"]["cohort_id"], cohort_id)
+            self.assertEqual(payload["members"][0]["run_id"], "run_1")
+
+    def test_export_dataset_command_supports_cohort_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_uri = f"sqlite:///{Path(tempdir) / 'facts.db'}"
+            out_path = Path(tempdir) / "cohort_sft.jsonl"
+            store = SQLiteFactStore(store_uri)
+            store.put_slice(
+                new_slice_record(
+                    slice_id="slice.capture",
+                    task_family="captured_agent_task",
+                    task_type="generic_proxy_capture",
+                    taxonomy_version="taxonomy.v1",
+                    sample_unit="run",
+                    verifier_contract="judge-v1",
+                    risk_level="medium",
+                    default_use="training_candidate",
+                    owner="ml-team",
+                )
+            )
+            request = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="request_started",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "json": {"messages": [{"role": "user", "content": "hi"}]},
+                },
+                request_id="req_1",
+            )
+            response = new_fact_event(
+                run_id="run_1",
+                session_id="session_1",
+                actor="model",
+                kind="response_finished",
+                payload={
+                    "path": "/v1/chat/completions",
+                    "status_code": 200,
+                    "json": {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+                },
+                request_id="req_1",
+                parent_ref=request.fact_id,
+            )
+            store.append_facts([request, response])
+            store.append_artifact(
+                new_artifact_record(
+                    artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                    target_ref="run:run_1",
+                    producer="taxonomy-v1",
+                    payload={
+                        "annotation_kind": E1_ANNOTATION_KIND,
+                        "task_family": "captured_agent_task",
+                        "task_type": "generic_proxy_capture",
+                        "task_template_hash": "tmpl_1",
+                        "task_instance_key": "task-1",
+                        "verifier_name": "judge-v1",
+                        "verifier_score": 0.8,
+                        "quality_confidence": 0.9,
+                        "taxonomy_version": "taxonomy.v1",
+                        "annotation_version": "e1.v1",
+                        "source_channel": "captured",
+                    },
+                    session_id="session_1",
+                    run_id="run_1",
+                    confidence=0.9,
+                )
+            )
+            cohort = freeze_cohort(
+                store=store,
+                slice_id="slice.capture",
+                name="capture-train",
+            )
+
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "clawgraph",
+                    "export",
+                    "dataset",
+                    "--store",
+                    store_uri,
+                    "--builder",
+                    "sft",
+                    "--cohort-id",
+                    cohort.cohort.cohort_id,
+                    "--out",
+                    str(out_path),
+                    "--json",
+                ],
+            ), redirect_stdout(buffer):
+                return_code = main()
+
+            self.assertEqual(return_code, 0)
+            payload = json.loads(buffer.getvalue())
+            self.assertEqual(payload["cohort_id"], cohort.cohort.cohort_id)
+            self.assertTrue(payload["dataset_snapshot_id"].startswith("ds_"))
+            self.assertTrue(out_path.exists())
 
     def test_payload_read_command_returns_spilled_body(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

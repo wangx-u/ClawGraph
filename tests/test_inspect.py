@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from clawgraph.artifacts import E1_ANNOTATION_ARTIFACT_TYPE, E1_ANNOTATION_KIND
 from clawgraph.graph import (
     build_branch_inspect_summaries,
     build_request_span_summaries,
@@ -206,12 +207,34 @@ class InspectViewsTest(unittest.TestCase):
                 session_id="session_1",
                 run_id="run_1",
             )
+            annotation = new_artifact_record(
+                artifact_type=E1_ANNOTATION_ARTIFACT_TYPE,
+                target_ref="run:run_1",
+                producer="taxonomy-v1",
+                payload={
+                    "annotation_kind": E1_ANNOTATION_KIND,
+                    "task_family": "captured_agent_task",
+                    "task_type": "generic_proxy_capture",
+                    "task_template_hash": "tmpl_1",
+                    "task_instance_key": "run:run_1",
+                    "verifier_name": "judge-v1",
+                    "verifier_score": 0.9,
+                    "quality_confidence": 0.95,
+                    "taxonomy_version": "taxonomy.v1",
+                    "annotation_version": "e1.v1",
+                    "source_channel": "captured",
+                },
+                session_id="session_1",
+                run_id="run_1",
+                confidence=0.95,
+            )
 
             store.append_fact(request)
             store.append_fact(response)
             store.append_artifact(stale_score)
             store.append_artifact(fresh_score)
             store.append_artifact(preference)
+            store.append_artifact(annotation)
 
             active_scores = store.list_artifacts(
                 session_id="session_1",
@@ -230,6 +253,7 @@ class InspectViewsTest(unittest.TestCase):
             self.assertTrue(builders["sft"].ready)
             self.assertTrue(builders["binary_rl"].ready)
             self.assertFalse(builders["preference"].ready)
+            self.assertEqual(readiness.evidence["level"], "E1")
             self.assertIn(
                 "active preference artifacts did not resolve to known branches",
                 builders["preference"].blockers,

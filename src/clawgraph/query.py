@@ -5,7 +5,18 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from clawgraph.protocol.models import ArtifactRecord, FactEvent
+from clawgraph.protocol.models import (
+    ArtifactRecord,
+    CohortMemberRecord,
+    CohortRecord,
+    DatasetSnapshotRecord,
+    EvalSuiteRecord,
+    FactEvent,
+    FeedbackQueueRecord,
+    PromotionDecisionRecord,
+    ScorecardRecord,
+    SliceRecord,
+)
 from clawgraph.store import SQLiteFactStore
 
 
@@ -109,3 +120,121 @@ class ClawGraphQueryService:
         if session_id is None:
             return []
         return list(self.store.iter_runs(session_id=session_id))
+
+    def get_slice(self, slice_id: str) -> SliceRecord | None:
+        """Return one registered slice by id."""
+
+        return self.store.get_slice(slice_id)
+
+    def list_slices(
+        self,
+        *,
+        task_family: str | None = None,
+        task_type: str | None = None,
+        taxonomy_version: str | None = None,
+        default_use: str | None = None,
+    ) -> list[SliceRecord]:
+        """List registered slices."""
+
+        return self.store.list_slices(
+            task_family=task_family,
+            task_type=task_type,
+            taxonomy_version=taxonomy_version,
+            default_use=default_use,
+        )
+
+    def get_cohort(self, cohort_id: str) -> CohortRecord | None:
+        """Return one frozen cohort by id."""
+
+        return self.store.get_cohort(cohort_id)
+
+    def list_cohorts(
+        self,
+        *,
+        slice_id: str | None = None,
+        status: str | None = None,
+    ) -> list[CohortRecord]:
+        """List frozen cohorts."""
+
+        return self.store.list_cohorts(slice_id=slice_id, status=status)
+
+    def list_cohort_members(
+        self,
+        cohort_id: str,
+        *,
+        slice_id: str | None = None,
+    ) -> list[CohortMemberRecord]:
+        """List all members of one frozen cohort."""
+
+        return self.store.list_cohort_members(cohort_id, slice_id=slice_id)
+
+    def get_dataset_snapshot(
+        self,
+        dataset_snapshot_id: str,
+    ) -> DatasetSnapshotRecord | None:
+        """Return one persisted dataset snapshot."""
+
+        return self.store.get_dataset_snapshot(dataset_snapshot_id)
+
+    def list_dataset_snapshots(
+        self,
+        *,
+        cohort_id: str | None = None,
+        builder: str | None = None,
+    ) -> list[DatasetSnapshotRecord]:
+        """List persisted dataset snapshots."""
+
+        return self.store.list_dataset_snapshots(cohort_id=cohort_id, builder=builder)
+
+    def get_eval_suite(self, eval_suite_id: str) -> EvalSuiteRecord | None:
+        """Return one eval suite."""
+
+        return self.store.get_eval_suite(eval_suite_id)
+
+    def list_eval_suites(
+        self,
+        *,
+        slice_id: str | None = None,
+        suite_kind: str | None = None,
+    ) -> list[EvalSuiteRecord]:
+        """List eval suites."""
+
+        return self.store.list_eval_suites(slice_id=slice_id, suite_kind=suite_kind)
+
+    def get_scorecard(self, scorecard_id: str) -> ScorecardRecord | None:
+        """Return one scorecard."""
+
+        return self.store.get_scorecard(scorecard_id)
+
+    def list_scorecards(
+        self,
+        *,
+        eval_suite_id: str | None = None,
+        slice_id: str | None = None,
+    ) -> list[ScorecardRecord]:
+        """List scorecards."""
+
+        return self.store.list_scorecards(eval_suite_id=eval_suite_id, slice_id=slice_id)
+
+    def list_promotion_decisions(
+        self,
+        *,
+        slice_id: str | None = None,
+        scorecard_id: str | None = None,
+    ) -> list[PromotionDecisionRecord]:
+        """List promotion decisions."""
+
+        return self.store.list_promotion_decisions(
+            slice_id=slice_id,
+            scorecard_id=scorecard_id,
+        )
+
+    def list_feedback_queue(
+        self,
+        *,
+        slice_id: str | None = None,
+        status: str | None = None,
+    ) -> list[FeedbackQueueRecord]:
+        """List feedback queue items."""
+
+        return self.store.list_feedback_queue(slice_id=slice_id, status=status)
