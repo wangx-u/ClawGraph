@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #eef5ff;
+  --bg-elevated: rgba(255, 255, 255, 0.9);
+  --bg-panel: rgba(255, 255, 255, 0.78);
+  --bg-panel-strong: rgba(255, 255, 255, 0.96);
+  --bg-soft: rgba(70, 126, 255, 0.06);
+  --line: rgba(71, 106, 167, 0.12);
+  --line-strong: rgba(71, 106, 167, 0.2);
+  --text: #162235;
+  --text-muted: #56657d;
+  --text-soft: #8090a8;
+  --accent: #3378ff;
+  --accent-2: #11c8b2;
+  --success: #1ba86d;
+  --warning: #c9891a;
+  --danger: #e15567;
+  --info: #3f7ee8;
+  --radius-lg: 1rem;
+  --radius-xl: 1.35rem;
+}
+
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(86, 139, 255, 0.2), transparent 30%),
+    radial-gradient(circle at 86% 12%, rgba(17, 200, 178, 0.12), transparent 20%),
+    radial-gradient(circle at 82% 82%, rgba(137, 173, 255, 0.16), transparent 22%),
+    linear-gradient(180deg, #f7fbff 0%, #eef5ff 36%, #edf4ff 100%);
+  background-color: var(--bg);
+}
+
+body {
+  min-height: 100vh;
+  color: var(--text);
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Space Grotesk", "Segoe UI", sans-serif;
+  background-image:
+    linear-gradient(to right, rgba(58, 103, 181, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(58, 103, 181, 0.05) 1px, transparent 1px);
+  background-size: 52px 52px;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: rgba(51, 120, 255, 0.18);
+}
+
+@layer base {
+  * {
+    @apply border-transparent;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply tracking-tight;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply border bg-[color:var(--bg-panel)] shadow-panel backdrop-blur-xl;
+    border-color: var(--line);
+  }
+
+  .surface-strong {
+    @apply border bg-[color:var(--bg-panel-strong)] shadow-glow backdrop-blur-xl;
+    border-color: var(--line-strong);
+  }
+
+  .panel-soft {
+    background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(242,248,255,0.9));
+    border: 1px solid var(--line);
+  }
+
+  .tech-highlight {
+    background:
+      linear-gradient(135deg, rgba(51,120,255,0.1), rgba(17,200,178,0.08)),
+      rgba(255,255,255,0.72);
+    border: 1px solid rgba(51, 120, 255, 0.14);
+  }
+
+  .grid-tech {
+    background-image:
+      linear-gradient(to right, rgba(51, 120, 255, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(51, 120, 255, 0.05) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .muted {
+    color: var(--text-muted);
+  }
+
+  .subtle {
+    color: var(--text-soft);
+  }
+
+  .mono {
+    font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  }
+}

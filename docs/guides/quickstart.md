@@ -32,6 +32,7 @@ This writes a complete session with:
 - a declared retry branch
 - a score artifact
 - a preference artifact
+- an E1 annotation artifact
 
 If you prefer runnable repository files instead of a bootstrap command, use
 [`examples/openclaw_quickstart`](../../examples/openclaw_quickstart/README.md).
@@ -60,6 +61,25 @@ clawgraph export dataset --builder binary_rl --session latest --out out/binary_r
 Each export also writes a manifest:
 
 - `*.jsonl.manifest.json`
+
+For a one-run bootstrap this direct export path is fine.
+
+For repeated training exports, prefer:
+
+```bash
+clawgraph slice register --slice-id slice.capture \
+  --task-family captured_agent_task \
+  --task-type generic_proxy_capture \
+  --taxonomy-version clawgraph.bootstrap.v1 \
+  --sample-unit branch \
+  --verifier-contract clawgraph.request_outcome_ratio.v1 \
+  --risk-level medium \
+  --default-use training_candidate \
+  --owner ml-team
+clawgraph slice candidates --slice-id slice.capture --min-quality-confidence 0.6
+clawgraph cohort freeze --slice-id slice.capture --name capture-train
+clawgraph export dataset --builder preference --cohort-id <cohort-id> --out out/preference.jsonl
+```
 
 ## 5. Derive supervision for real captured sessions
 

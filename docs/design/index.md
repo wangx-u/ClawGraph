@@ -79,6 +79,10 @@ ClawGraph 不负责：
   定义什么 slice 适合什么训练配方、模型带宽、fallback 和 coverage。
 - [评测、放量与回流标准](./replacement_validation)
   定义离线、golden、shadow、canary、回滚和回流机制。
+- [面向用户的 Dashboard 产品设计](./user_dashboard_prd.zh-CN.md)
+  定义如何把以上分层能力组织成一套面向平台、训练、评估、PM 和 BD 的控制面板。
+- [Dashboard 页面线框与交互流拆解](./user_dashboard_wireframes.zh-CN.md)
+  继续拆解 Dashboard 的全局 shell、页面线框、对象详情模板和核心任务流。
 
 ## 推荐实施顺序
 
