@@ -10,7 +10,7 @@ const flowLinks: Record<string, { primary: string; secondary: string }> = {
   "investigate-failure": { primary: "/sessions", secondary: "/supervision" },
   "build-dataset": { primary: "/curation/candidates", secondary: "/datasets" },
   "validate-slice": { primary: "/coverage", secondary: "/evaluation" },
-  "review-feedback": { primary: "/feedback", secondary: "/curation/cohorts/cohort_train_001" }
+  "review-feedback": { primary: "/feedback", secondary: "/curation/cohorts/cohort_train_aiops_v1" }
 };
 
 export default async function FlowPage({

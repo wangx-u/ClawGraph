@@ -108,9 +108,9 @@ export default async function ReplayPage({
         <Tabs active="导出就绪度" items={["Artifacts 叠层", "Payload 预览", "语义事件", "导出就绪度"]} />
         <div className="mt-5 grid gap-3 md:grid-cols-3">
           {[
-            "sft：就绪，预计可产出 12 条记录。",
-            "preference：受阻，缺少 active preference artifacts。",
-            "binary_rl：就绪，已存在 verifier 支撑记录。"
+            "sft：就绪，成功分支里 metrics / logs / rollout 12 条 request 已可导出。",
+            "preference：已抽取 rollback vs continue-observe 的 1 组偏好对，但仍缺更多 approval 样本。",
+            "binary_rl：就绪，整次 incident run 已具备最终恢复结果与 verifier 记录。"
           ].map((item) => (
             <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={item}>
               {item}

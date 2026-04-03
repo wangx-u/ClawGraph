@@ -41,7 +41,7 @@ export default async function FeedbackPage() {
               ["送回会话收件箱", "/sessions"],
               ["送到监督模块", "/supervision"],
               ["送到策展模块", "/curation/candidates"],
-              ["触发 Cohort Refresh", "/curation/cohorts/cohort_train_001"]
+              ["触发 Cohort Refresh", "/curation/cohorts/cohort_train_aiops_v1"]
             ].map(([label, href]) => (
               <Button className="w-full justify-start" href={href} key={label} variant="secondary">
                 {label}

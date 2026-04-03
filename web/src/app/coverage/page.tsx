@@ -40,11 +40,11 @@ export default async function CoveragePage() {
         <Card eyebrow="护栏规则" title="Fallback 触发条件">
           <div className="space-y-3">
             {[
-              "出现未知 subtype",
-              "上下文长度超过阈值",
-              "tool path 深度过高",
-              "verifier fail 突增",
-              "出现安全回归"
+              "缺少 rollout history 或 deploy_sha",
+              "回滚动作没有 approval artifact",
+              "涉及跨服务 blast radius 但证据不足",
+              "verifier fail 或误回滚率突增",
+              "需要人工确认的高危生产动作"
             ].map((item) => (
               <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={item}>
                 {item}

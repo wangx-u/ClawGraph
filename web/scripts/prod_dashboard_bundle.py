@@ -24,6 +24,25 @@ from clawgraph.query import ClawGraphQueryService  # noqa: E402
 from clawgraph.store import SQLiteFactStore  # noqa: E402
 
 
+def normalize_store_uri(store_uri: str) -> str:
+    if store_uri.startswith("sqlite:///"):
+        raw_path = store_uri.removeprefix("sqlite:///")
+        if raw_path and not raw_path.startswith("/"):
+            return f"sqlite://{(Path.cwd() / raw_path).resolve()}"
+        return store_uri
+
+    if store_uri.startswith("sqlite://"):
+        raw_path = store_uri.removeprefix("sqlite://")
+        if raw_path and not raw_path.startswith("/"):
+            return f"sqlite://{(Path.cwd() / raw_path).resolve()}"
+        return store_uri
+
+    resolved = Path(store_uri).expanduser()
+    if not resolved.is_absolute():
+        resolved = (Path.cwd() / resolved).resolve()
+    return f"sqlite://{resolved}"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--store", required=True)
@@ -165,7 +184,7 @@ def safe_actor(actor: Any) -> str:
 
 def main() -> int:
     args = parse_args()
-    store = SQLiteFactStore(args.store)
+    store = SQLiteFactStore(normalize_store_uri(args.store))
     service = ClawGraphQueryService(store=store)
 
     session_ids = list(store.iter_sessions())[: args.session_limit]

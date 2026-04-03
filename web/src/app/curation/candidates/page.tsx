@@ -20,12 +20,12 @@ export default async function CandidatePoolPage() {
       <PageHeader
         title="策展 / 候选池"
         description="围绕单个切片复查候选运行、应用质量门槛，并决定哪些样本应该进入下一版冻结 cohort。"
-        primaryAction={<Button href="/curation/cohorts/cohort_train_001" variant="primary">冻结 Cohort</Button>}
+        primaryAction={<Button href="/curation/cohorts/cohort_train_aiops_v1" variant="primary">冻结 Cohort</Button>}
         secondaryAction={<Button href="/datasets" variant="secondary">打开导出流</Button>}
       />
       <FilterBar
         filters={[
-          "切片：slice.capture",
+          "切片：slice.aiops.incident_triage",
           "质量 >= 0.60",
           "Verifier >= 0.60",
           "来源：全部",
@@ -45,11 +45,11 @@ export default async function CandidatePoolPage() {
         <Card eyebrow="复核队列" title="被阻塞的主要原因">
           <div className="space-y-3">
             {[
-              "质量置信度偏低",
-              "verifier 分数低于阈值",
-              "出现未知 subtype",
-              "task instance 冲突",
-              "缺少必要 annotation 字段"
+              "日志证据不完整",
+              "rollback 分支缺少人工确认",
+              "同类事故 cluster 已超配额",
+              "root cause 标签冲突",
+              "缺少 deploy_sha / alert_fingerprint 字段"
             ].map((reason) => (
               <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={reason}>
                 {reason}

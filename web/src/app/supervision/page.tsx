@@ -17,7 +17,7 @@ export default async function SupervisionPage() {
         title="监督"
         description="在不改写底层事实的前提下管理 bootstrap artifacts、人工监督信号和语义覆盖，支撑后续导出与评测。"
         primaryAction={<Button href="/flows/build-dataset" variant="primary">执行 Bootstrap</Button>}
-        secondaryAction={<Button href="/sessions/sess_123/runs/run_capture_1/replay" variant="secondary">返回回放</Button>}
+        secondaryAction={<Button href="/sessions/sess_aiops_checkout_504/runs/run_checkout_504_triage/replay" variant="secondary">返回回放</Button>}
       />
 
       <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
