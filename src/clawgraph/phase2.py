@@ -19,6 +19,7 @@ from clawgraph.curation import CohortFreezeResult, freeze_cohort, preview_slice_
 from clawgraph.dashboard import inspect_run_workflow
 from clawgraph.evaluation import (
     create_eval_suite_from_cohort,
+    derive_eval_scorecard_inputs,
     record_promotion_decision,
     record_scorecard,
     sync_feedback_queue_from_slice_review,
@@ -439,23 +440,53 @@ def run_phase2_workflow(
                         else None
                     ),
                 )
-                if scorecard_metrics is not None and scorecard_thresholds is not None:
+                resolved_scorecard_metrics = (
+                    dict(scorecard_metrics) if scorecard_metrics is not None else None
+                )
+                resolved_scorecard_thresholds = (
+                    dict(scorecard_thresholds) if scorecard_thresholds is not None else None
+                )
+                scorecard_metadata: dict[str, Any] | None = None
+                if resolved_scorecard_metrics is None or resolved_scorecard_thresholds is None:
+                    try:
+                        (
+                            derived_metrics,
+                            derived_thresholds,
+                            derived_metadata,
+                        ) = derive_eval_scorecard_inputs(
+                            store=store_instance,
+                            eval_suite_id=eval_suite.eval_suite_id,
+                            thresholds=resolved_scorecard_thresholds,
+                        )
+                        if resolved_scorecard_metrics is None:
+                            resolved_scorecard_metrics = derived_metrics
+                        if resolved_scorecard_thresholds is None:
+                            resolved_scorecard_thresholds = derived_thresholds
+                        scorecard_metadata = derived_metadata
+                    except ValueError as exc:
+                        warnings.append(str(exc))
+                if (
+                    resolved_scorecard_metrics is not None
+                    and resolved_scorecard_thresholds is not None
+                ):
                     scorecard = record_scorecard(
                         store=store_instance,
                         eval_suite_id=eval_suite.eval_suite_id,
                         candidate_model=candidate_model or "candidate",
                         baseline_model=baseline_model or "baseline",
-                        metrics=scorecard_metrics,
-                        thresholds=scorecard_thresholds,
+                        metrics=resolved_scorecard_metrics,
+                        thresholds=resolved_scorecard_thresholds,
+                        metadata=scorecard_metadata,
                     )
-                    if promotion_stage and coverage_policy_version:
-                        promotion = record_promotion_decision(
-                            store=store_instance,
-                            scorecard_id=scorecard.scorecard_id,
-                            stage=promotion_stage,
-                            coverage_policy_version=coverage_policy_version,
-                            summary=promotion_summary or f"phase2 {scorecard.verdict}",
-                        )
+                    promotion = record_promotion_decision(
+                        store=store_instance,
+                        scorecard_id=scorecard.scorecard_id,
+                        stage=promotion_stage or "offline",
+                        coverage_policy_version=(
+                            coverage_policy_version or "clawgraph.coverage.default.v1"
+                        ),
+                        summary=promotion_summary or f"phase2 {scorecard.verdict}",
+                    )
 
     workflow_final = inspect_run_workflow(
         store=store_instance,

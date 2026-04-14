@@ -35,7 +35,7 @@ export default async function EvalSuiteDetailPage({
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`评测套件 ${suite.id}`}
+        title={suite.title ?? suite.name ?? `评测套件 ${suite.id}`}
         description="从套件结构、candidate 指标和最新 recommendation 视角查看一个 slice 的替代决策依据。"
         primaryAction={<Button href="/coverage" variant="primary">更新覆盖决策</Button>}
         secondaryAction={<Button href="/evaluation" variant="secondary">返回评测</Button>}
@@ -43,10 +43,13 @@ export default async function EvalSuiteDetailPage({
 
       <Card eyebrow="套件摘要" title={suite.kind} strong>
         <div className="grid gap-3 md:grid-cols-4">
-          <div className="tech-highlight rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">Slice</div><div className="mt-3 text-xl font-semibold">{suite.sliceId}</div></div>
+          <div className="tech-highlight rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">任务切片</div><div className="mt-3 text-xl font-semibold">{suite.sliceLabel ?? suite.sliceId}</div></div>
           <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">类型</div><div className="mt-3 text-xl font-semibold">{suite.kind}</div></div>
           <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">样本数</div><div className="mt-3 text-xl font-semibold">{suite.items}</div></div>
-          <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">状态</div><div className="mt-3 text-xl font-semibold">{genericStatusLabel(suite.status)}</div></div>
+          <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">来源批次</div><div className="mt-3 text-xl font-semibold">{suite.cohortName ?? suite.cohortId}</div></div>
+        </div>
+        <div className="mt-4 rounded-2xl bg-white/70 px-4 py-3 text-sm text-[color:var(--text-muted)]">
+          {suite.timeRangeLabel ?? "时间范围待补充"} · 当前状态 {genericStatusLabel(suite.status)}
         </div>
       </Card>
 
@@ -65,6 +68,7 @@ export default async function EvalSuiteDetailPage({
                 <Badge tone={genericStatusTone(scorecard.verdict)}>{genericStatusLabel(scorecard.verdict)}</Badge>
               </div>
               <div className="mt-4 space-y-2 text-sm text-[color:var(--text-muted)]">
+                <div>任务：{scorecard.sliceLabel ?? scorecard.sliceId}</div>
                 <div>成功率：{scorecard.successRate}</div>
                 <div>Verifier：{scorecard.verifierRate}</div>
                 <div>P95 延迟：{scorecard.p95Latency}</div>

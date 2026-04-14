@@ -234,6 +234,7 @@ export function DatasetWorkspace({ readinessRows, snapshots }: DatasetWorkspaceP
                           onClick={() => setSelectedSnapshotId(snapshot.id)}
                           type="button"
                         >
+                          <div className="text-sm font-medium">{snapshot.title ?? snapshot.id}</div>
                           <div className="mono text-xs text-[color:var(--text-soft)]">{snapshot.id}</div>
                           <div className="mt-2 text-sm text-[color:var(--text-muted)]">
                             {snapshot.sampleUnit} · {snapshot.recordCount} 条 · {snapshot.createdAt}
@@ -254,7 +255,8 @@ export function DatasetWorkspace({ readinessRows, snapshots }: DatasetWorkspaceP
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">当前快照</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedSnapshot.id}</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedSnapshot.title ?? selectedSnapshot.id}</div>
+                      <div className="mono mt-2 text-xs text-[color:var(--text-soft)]">{selectedSnapshot.id}</div>
                     </div>
                     <Badge tone="info">{selectedSnapshot.builder}</Badge>
                   </div>
@@ -275,7 +277,7 @@ export function DatasetWorkspace({ readinessRows, snapshots }: DatasetWorkspaceP
                   <div className="mt-5 rounded-2xl bg-white/70 p-4">
                     <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">关联 Cohort</div>
                     <div className="mt-3 text-sm text-[color:var(--text-muted)]">
-                      {selectedSnapshot.cohortId} · 创建于 {selectedSnapshot.createdAt}
+                      {selectedSnapshot.cohortName ?? selectedSnapshot.cohortId} · 创建于 {selectedSnapshot.createdAt}
                     </div>
                   </div>
                   <div className="mt-5 flex flex-wrap gap-3">

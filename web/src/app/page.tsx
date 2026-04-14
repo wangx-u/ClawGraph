@@ -93,6 +93,7 @@ export default async function OverviewPage() {
               <div className="tech-highlight rounded-[1.1rem] p-4" key={item.sliceId}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
+                    <div className="text-sm font-medium">{item.sliceLabel ?? item.sliceId}</div>
                     <div className="mono text-xs text-[color:var(--text-soft)]">{item.sliceId}</div>
                     <div className="mt-1 text-lg font-medium">{item.opportunity}</div>
                     <div className="mt-2 text-sm text-[color:var(--text-muted)]">{item.reason}</div>
@@ -130,9 +131,14 @@ export default async function OverviewPage() {
               <div className="mt-2 text-xs text-[color:var(--text-muted)]">能否稳定归到同一 session / run。</div>
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
-              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">任务识别清晰度</div>
-              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.semanticCoverage ?? "-"}</div>
-              <div className="mt-2 text-xs text-[color:var(--text-muted)]">能否看清任务类型、关键节点和结果。</div>
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">任务标签覆盖率</div>
+              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.taskCoverage ?? ingestSummary?.semanticCoverage ?? "-"}</div>
+              <div className="mt-2 text-xs text-[color:var(--text-muted)]">能否稳定识别任务族、任务类型和实例键。</div>
+            </div>
+            <div className="panel-soft rounded-[1.1rem] p-4">
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">决策语义覆盖率</div>
+              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.decisionCoverage ?? ingestSummary?.semanticCoverage ?? "-"}</div>
+              <div className="mt-2 text-xs text-[color:var(--text-muted)]">是否已经补到 retry、fallback、route、task_completed 等关键节点。</div>
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
               <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">待补基础标签</div>
@@ -140,9 +146,9 @@ export default async function OverviewPage() {
               <div className="mt-2 text-xs text-[color:var(--text-muted)]">这些运行还不能直接进入数据池。</div>
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
-              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">待人工确认</div>
-              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.needsReviewRuns ?? 0}</div>
-              <div className="mt-2 text-xs text-[color:var(--text-muted)]">低置信或存在分歧的运行会排到这里。</div>
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">已生成验证资产</div>
+              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.evaluationAssetCount ?? 0}</div>
+              <div className="mt-2 text-xs text-[color:var(--text-muted)]">已经冻结并可用于对比 candidate / baseline 的验证套件。</div>
             </div>
           </div>
         </Card>

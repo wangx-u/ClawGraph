@@ -153,7 +153,7 @@ class DashboardSnapshotTest(unittest.TestCase):
             readiness = {item["builder"]: item for item in bundle["readinessRows"]}
             workflow_runs = {item["runId"]: item for item in bundle["workflowRuns"]}
 
-            self.assertEqual(metrics["可评估运行"]["change"], "1/3")
+            self.assertEqual(metrics["验证资产"]["value"], "1")
             self.assertEqual(metrics["可导出运行"]["value"], "2")
             self.assertEqual(sessions["session_1"]["evidenceLevel"], "E0")
             self.assertEqual(runs["run_1"]["evidenceLevel"], "E2")
@@ -161,6 +161,11 @@ class DashboardSnapshotTest(unittest.TestCase):
             self.assertEqual(runs["run_1"]["stage"], "evaluate")
             self.assertEqual(workflow_runs["run_2"]["reviewStatus"], "feedback")
             self.assertEqual(bundle["ingestSummary"]["needsAnnotationRuns"], 1)
+            self.assertEqual(bundle["ingestSummary"]["taskCoverage"], "67%")
+            self.assertEqual(bundle["ingestSummary"]["decisionCoverage"], "33%")
+            self.assertEqual(bundle["ingestSummary"]["evaluationAssetCount"], 1)
+            self.assertIn("到", bundle["snapshots"][0]["timeRangeLabel"])
+            self.assertIn("质量", bundle["cohorts"][0]["qualityGateLabel"])
             self.assertTrue(readiness["sft"]["ready"])
             self.assertNotIn("facts", readiness)
 

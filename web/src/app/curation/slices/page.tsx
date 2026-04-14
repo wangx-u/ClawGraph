@@ -40,7 +40,10 @@ export default async function SliceRegistryPage() {
         <DataTable
           headers={["Slice", "任务族", "任务类型", "Taxonomy", "样本单元", "风险", "负责人"]}
           rows={slices.map((slice) => [
-            <span className="mono text-xs text-[color:var(--text-soft)]" key={`${slice.id}-id`}>{slice.id}</span>,
+            <div key={`${slice.id}-id`}>
+              <div className="font-medium">{slice.label ?? slice.id}</div>
+              <div className="mono text-xs text-[color:var(--text-soft)]">{slice.id}</div>
+            </div>,
             slice.taskFamily,
             slice.taskType,
             slice.taxonomyVersion,

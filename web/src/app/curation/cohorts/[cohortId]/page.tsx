@@ -29,7 +29,7 @@ export default async function CohortDetailPage({
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`Cohort ${cohort.id}`}
+        title={cohort.title ?? cohort.name}
         description="在导出数据快照或建立评测资产之前，先确认 cohort 成员构成、manifest 意图以及下游消费路径。"
         primaryAction={<Button href="/datasets" variant="primary">打开数据集</Button>}
         secondaryAction={<Button href="/evaluation" variant="secondary">创建评测套件</Button>}
@@ -47,15 +47,18 @@ export default async function CohortDetailPage({
         <Card eyebrow="Manifest 预览" title="冻结摘要">
           <div className="space-y-3">
             {[
-              `slice ids：${cohort.sliceIds.join(", ")}`,
-              "cluster 规则：每个 task instance 最多 1 条，每个模板最多 3 条",
-              "时间范围：2026-03-01 到 2026-04-02",
-              "质量门槛：quality >= 0.75，verifier >= 0.60"
+              `覆盖任务：${cohort.sliceLabels?.join(" / ") || cohort.sliceIds.join(", ")}`,
+              `筛选规则：${cohort.selectionSummary ?? "待补充"}`,
+              `时间范围：${cohort.timeRangeLabel ?? "待补充"}`,
+              `质量门槛：${cohort.qualityGateLabel ?? "待补充"}`
             ].map((line) => (
               <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={line}>
                 {line}
               </div>
             ))}
+          </div>
+          <div className="mt-4 rounded-2xl bg-white/70 px-4 py-3 text-sm text-[color:var(--text-muted)]">
+            Cohort ID：<span className="mono">{cohort.id}</span>
           </div>
         </Card>
       </div>

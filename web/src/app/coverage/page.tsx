@@ -25,7 +25,10 @@ export default async function CoveragePage() {
           <DataTable
             headers={["Slice", "Verifier", "风险", "复杂度", "Recipe", "模型带宽", "结论", "放量"]}
             rows={coverageRows.map((row) => [
-              <span className="mono text-xs text-[color:var(--text-soft)]" key={`${row.sliceId}-id`}>{row.sliceId}</span>,
+              <div key={`${row.sliceId}-id`}>
+                <div className="font-medium">{row.sliceLabel ?? row.sliceId}</div>
+                <div className="mono text-xs text-[color:var(--text-soft)]">{row.sliceId}</div>
+              </div>,
               strengthLabel(row.verifier),
               <Badge key={`${row.sliceId}-risk`} tone={riskTone(row.risk)}>{riskLabel(row.risk)}</Badge>,
               row.complexity,

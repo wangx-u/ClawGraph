@@ -119,6 +119,7 @@ class DashboardWorkflowOverview:
     needs_review_runs: int
     ready_for_dataset_runs: int
     ready_for_eval_runs: int
+    evaluation_assets: int
     feedback_open_runs: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -404,6 +405,7 @@ def build_dashboard_snapshot(
             1 for row in workflow_rows if row.stage in {"dataset", "evaluate"}
         ),
         ready_for_eval_runs=sum(1 for row in workflow_rows if row.stage == "evaluate"),
+        evaluation_assets=sum(1 for suite in all_eval_suites if suite.status == "active"),
         feedback_open_runs=sum(1 for row in workflow_rows if row.review_status == "feedback"),
     )
     return DashboardSnapshot(
@@ -493,7 +495,8 @@ def render_dashboard_snapshot(snapshot: DashboardSnapshot) -> str:
             f"needs_annotation={snapshot.workflow_overview.needs_annotation_runs} "
             f"needs_review={snapshot.workflow_overview.needs_review_runs} "
             f"ready_dataset={snapshot.workflow_overview.ready_for_dataset_runs} "
-            f"ready_eval={snapshot.workflow_overview.ready_for_eval_runs}"
+            f"ready_eval={snapshot.workflow_overview.ready_for_eval_runs} "
+            f"eval_assets={snapshot.workflow_overview.evaluation_assets}"
         ),
         "",
         "Recent sessions:",

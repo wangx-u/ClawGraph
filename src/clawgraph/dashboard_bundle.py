@@ -217,6 +217,11 @@ def build_web_dashboard_bundle(
     scorecards = service.list_scorecards()
     decisions = service.list_promotion_decisions()
     feedback_items = service.list_feedback_queue()
+    slice_lookup = {slice_record.slice_id: slice_record for slice_record in slices}
+    slice_label_map = {
+        slice_record.slice_id: task_label(slice_record.task_family, slice_record.task_type)
+        for slice_record in slices
+    }
 
     holdout_run_ids: set[str] = set()
     cohort_payloads: list[dict[str, Any]] = []
@@ -228,21 +233,40 @@ def build_web_dashboard_bundle(
         holdout_count = 0
         if isinstance(split_counts, dict):
             holdout_count = int(split_counts.get("val", 0)) + int(split_counts.get("test", 0))
-        review_queue = cohort.manifest.get("review")
+        review_payload = cohort.manifest.get("review")
+        review_queue = review_payload.get("queue") if isinstance(review_payload, dict) else review_payload
         review_count = len(review_queue) if isinstance(review_queue, list) else 0
+        quality_gate = None
+        if isinstance(cohort.manifest.get("quality"), dict):
+            quality_gate = cohort.manifest["quality"].get("quality_gate")
         if purpose == "评测":
             holdout_run_ids.update(member.run_id for member in members)
         cohort_payloads.append(
             {
                 "id": cohort.cohort_id,
                 "name": cohort.name,
+                "title": cohort.name or cohort.cohort_id,
                 "purpose": purpose,
+                "expectedUse": expected_use or ("evaluation" if purpose == "评测" else "training"),
                 "sliceIds": cohort.slice_ids,
+                "sliceLabels": [
+                    slice_label_map.get(slice_id, humanize_identifier(slice_id))
+                    for slice_id in cohort.slice_ids
+                ],
                 "selectedCount": len(members),
                 "holdoutCount": holdout_count,
                 "reviewCount": review_count,
+                "timeRange": cohort.manifest.get("time_range")
+                if isinstance(cohort.manifest.get("time_range"), dict)
+                else None,
+                "timeRangeLabel": describe_time_range(cohort.manifest.get("time_range")),
+                "selectionSummary": describe_selection_query(cohort.manifest),
+                "qualityGate": quality_gate,
+                "qualityGateLabel": describe_quality_gate(quality_gate),
+                "manifest": cohort.manifest,
             }
         )
+    cohort_lookup = {item["id"]: item for item in cohort_payloads}
 
     candidate_payloads: list[dict[str, Any]] = []
     for slice_record in slices:
@@ -271,56 +295,14 @@ def build_web_dashboard_bundle(
                         candidate.task_template_hash,
                     ),
                     "status": status,
+                    "taskLabel": task_label(candidate.task_family, candidate.task_type),
                 }
             )
 
-    snapshot_payloads = [
-        {
-            "id": snapshot_record.dataset_snapshot_id,
-            "builder": snapshot_record.builder,
-            "sampleUnit": snapshot_record.sample_unit,
-            "cohortId": snapshot_record.cohort_id or "-",
-            "recordCount": snapshot_record.record_count,
-            "outputPath": snapshot_record.output_path or "-",
-            "createdAt": format_datetime(snapshot_record.created_at),
-        }
-        for snapshot_record in snapshots
-    ]
-    eval_suite_payloads = [
-        {
-            "id": suite.eval_suite_id,
-            "sliceId": suite.slice_id,
-            "kind": suite.suite_kind,
-            "cohortId": suite.cohort_id or "-",
-            "status": suite.status,
-            "items": int(
-                suite.manifest.get("task_instance_count")
-                or suite.manifest.get("run_count")
-                or suite.manifest.get("session_count")
-                or 0
-            ),
-        }
-        for suite in eval_suites
-    ]
-    scorecard_payloads = [
-        {
-            "id": scorecard.scorecard_id,
-            "evalSuiteId": scorecard.eval_suite_id,
-            "sliceId": scorecard.slice_id,
-            "candidateModel": scorecard.candidate_model,
-            "baselineModel": scorecard.baseline_model,
-            "verdict": scorecard.verdict,
-            "successRate": format_metric(scorecard.metrics, "task_success_rate", "success_rate"),
-            "verifierRate": format_metric(scorecard.metrics, "verifier_pass_rate", "verifier_rate"),
-            "p95Latency": format_metric(scorecard.metrics, "p95_latency", "p95_latency_ms"),
-            "cost": format_metric(scorecard.metrics, "cost_ratio", "unit_cost"),
-            "fallbackRate": format_metric(scorecard.metrics, "fallback_rate"),
-        }
-        for scorecard in scorecards
-    ]
     slices_payload = [
         {
             "id": slice_record.slice_id,
+            "label": slice_label_map.get(slice_record.slice_id, humanize_identifier(slice_record.slice_id)),
             "taskFamily": slice_record.task_family,
             "taskType": slice_record.task_type,
             "taxonomyVersion": slice_record.taxonomy_version,
@@ -329,8 +311,104 @@ def build_web_dashboard_bundle(
             "risk": slice_record.risk_level,
             "defaultUse": slice_record.default_use,
             "owner": slice_record.owner,
+            "description": slice_record.description,
         }
         for slice_record in slices
+    ]
+    snapshot_payloads = []
+    for snapshot_record in snapshots:
+        cohort_payload = (
+            cohort_lookup.get(snapshot_record.cohort_id)
+            if isinstance(snapshot_record.cohort_id, str)
+            else None
+        )
+        manifest = snapshot_record.manifest if isinstance(snapshot_record.manifest, dict) else {}
+        snapshot_payloads.append(
+            {
+                "id": snapshot_record.dataset_snapshot_id,
+                "title": build_snapshot_title(
+                    builder=snapshot_record.builder,
+                    cohort_name=None if cohort_payload is None else cohort_payload["title"],
+                ),
+                "builder": snapshot_record.builder,
+                "sampleUnit": snapshot_record.sample_unit,
+                "cohortId": snapshot_record.cohort_id or "-",
+                "cohortName": "-" if cohort_payload is None else cohort_payload["title"],
+                "recordCount": snapshot_record.record_count,
+                "outputPath": snapshot_record.output_path or "-",
+                "createdAt": format_datetime(snapshot_record.created_at),
+                "taxonomyVersions": string_list(manifest.get("taxonomy_versions")),
+                "timeRange": manifest.get("time_range") if isinstance(manifest.get("time_range"), dict) else None,
+                "timeRangeLabel": describe_time_range(manifest.get("time_range")),
+                "splitSummary": describe_snapshot_split(manifest),
+                "selectionSummary": describe_cohort_contract(manifest.get("cohort_contract")),
+                "manifest": manifest,
+            }
+        )
+    snapshot_lookup = {item["id"]: item for item in snapshot_payloads}
+    scorecard_payloads = [
+        {
+            "id": scorecard.scorecard_id,
+            "evalSuiteId": scorecard.eval_suite_id,
+            "sliceId": scorecard.slice_id,
+            "sliceLabel": slice_label_map.get(scorecard.slice_id, humanize_identifier(scorecard.slice_id)),
+            "candidateModel": scorecard.candidate_model,
+            "baselineModel": scorecard.baseline_model,
+            "verdict": scorecard.verdict,
+            "successRate": format_metric(scorecard.metrics, "task_success_rate", "success_rate"),
+            "verifierRate": format_metric(scorecard.metrics, "verifier_pass_rate", "verifier_rate"),
+            "p95Latency": format_metric(scorecard.metrics, "p95_latency", "p95_latency_ms"),
+            "cost": format_metric(scorecard.metrics, "cost_ratio", "unit_cost"),
+            "fallbackRate": format_metric(scorecard.metrics, "fallback_rate"),
+            "summary": scorecard.metadata.get("summary") if isinstance(scorecard.metadata, dict) else None,
+        }
+        for scorecard in scorecards
+    ]
+    eval_suite_payloads = [
+        {
+            "id": suite.eval_suite_id,
+            "name": suite.name,
+            "title": suite.name or suite.eval_suite_id,
+            "sliceId": suite.slice_id,
+            "sliceLabel": slice_label_map.get(suite.slice_id, humanize_identifier(suite.slice_id)),
+            "kind": suite.suite_kind,
+            "cohortId": suite.cohort_id or "-",
+            "cohortName": (
+                cohort_lookup[suite.cohort_id]["title"]
+                if isinstance(suite.cohort_id, str) and suite.cohort_id in cohort_lookup
+                else "-"
+            ),
+            "datasetSnapshotId": suite.dataset_snapshot_id or "-",
+            "datasetSnapshotTitle": (
+                snapshot_lookup[suite.dataset_snapshot_id]["title"]
+                if isinstance(suite.dataset_snapshot_id, str) and suite.dataset_snapshot_id in snapshot_lookup
+                else "-"
+            ),
+            "status": suite.status,
+            "items": int(
+                suite.manifest.get("task_instance_count")
+                or suite.manifest.get("run_count")
+                or suite.manifest.get("session_count")
+                or 0
+            ),
+            "timeRange": suite.manifest.get("time_range")
+            if isinstance(suite.manifest.get("time_range"), dict)
+            else None,
+            "timeRangeLabel": describe_time_range(suite.manifest.get("time_range")),
+            "scorecardCount": sum(
+                1 for scorecard in scorecards if scorecard.eval_suite_id == suite.eval_suite_id
+            ),
+            "latestVerdict": next(
+                (
+                    scorecard.verdict
+                    for scorecard in scorecards
+                    if scorecard.eval_suite_id == suite.eval_suite_id
+                ),
+                None,
+            ),
+            "manifest": suite.manifest,
+        }
+        for suite in eval_suites
     ]
 
     coverage_rows: list[dict[str, Any]] = []
@@ -367,6 +445,7 @@ def build_web_dashboard_bundle(
         coverage_rows.append(
             {
                 "sliceId": slice_record.slice_id,
+                "sliceLabel": slice_label_map.get(slice_record.slice_id, humanize_identifier(slice_record.slice_id)),
                 "verifier": strength_for_slice(
                     slice_record,
                     None if slice_scorecard is None else slice_scorecard.metrics,
@@ -382,6 +461,7 @@ def build_web_dashboard_bundle(
         opportunity_items.append(
             {
                 "sliceId": slice_record.slice_id,
+                "sliceLabel": slice_label_map.get(slice_record.slice_id, humanize_identifier(slice_record.slice_id)),
                 "opportunity": opportunity,
                 "reason": f"scorecard={verdict}，risk={slice_record.risk_level}，候选池可见",
                 "href": "/coverage",
@@ -389,20 +469,48 @@ def build_web_dashboard_bundle(
             }
         )
 
-    feedback_payloads = [
-        {
-            "id": item.feedback_id,
-            "source": item.source,
-            "targetRef": item.target_ref,
-            "reason": item.reason,
-            "sliceId": item.slice_id,
-            "status": item.status,
-            "createdAt": item.created_at.isoformat() if item.created_at is not None else None,
-            "reviewer": item.metadata.get("reviewer"),
-            "resolutionNote": item.metadata.get("resolution_note"),
-        }
-        for item in feedback_items
-    ]
+    feedback_payloads = []
+    for item in feedback_items:
+        run_id = None
+        if isinstance(item.payload, dict):
+            payload_run_id = item.payload.get("run_id")
+            if isinstance(payload_run_id, str) and payload_run_id:
+                run_id = payload_run_id
+        if run_id is None and item.target_ref.startswith("run:"):
+            run_id = item.target_ref.split(":", 1)[1]
+        run_row = run_rows_by_id.get(run_id) if run_id is not None else None
+        workflow_row = workflow_rows_by_id.get(run_id) if run_id is not None else None
+        feedback_payloads.append(
+            {
+                "id": item.feedback_id,
+                "source": item.source,
+                "targetRef": item.target_ref,
+                "targetLabel": (
+                    run_label(run_row.task_family, run_row.task_type, run_id)
+                    if run_row is not None
+                    else item.target_ref
+                ),
+                "runId": run_id,
+                "sessionId": (
+                    item.payload.get("session_id")
+                    if isinstance(item.payload, dict) and isinstance(item.payload.get("session_id"), str)
+                    else (None if run_row is None else run_row.session_id)
+                ),
+                "reason": item.reason,
+                "sliceId": item.slice_id,
+                "sliceLabel": slice_label_map.get(item.slice_id, humanize_identifier(item.slice_id)),
+                "taskLabel": (
+                    task_label(run_row.task_family, run_row.task_type)
+                    if run_row is not None
+                    else None
+                ),
+                "status": item.status,
+                "stage": None if workflow_row is None else workflow_row.stage,
+                "createdAt": item.created_at.isoformat() if item.created_at is not None else None,
+                "reviewer": item.metadata.get("reviewer"),
+                "resolutionNote": item.metadata.get("resolution_note"),
+            }
+        )
     readiness_rows = [
         {
             "builder": builder_name,
@@ -445,6 +553,7 @@ def build_web_dashboard_bundle(
     declared_ratios = [run["declaredRatio"] for run in all_runs]
     anomaly_sessions = [session for session in sessions_payload if session["anomalies"]]
     feedback_open = [item for item in feedback_payloads if item["status"] in {"queued", "open"}]
+    evaluation_asset_count = snapshot.overview.active_eval_suites
 
     overview_metrics = [
         {
@@ -466,9 +575,9 @@ def build_web_dashboard_bundle(
             "tone": "success",
         },
         {
-            "label": "可评估运行",
-            "value": format_percent(snapshot.overview.e2_ready_runs / total_runs if total_runs else 0),
-            "change": f"{snapshot.overview.e2_ready_runs}/{total_runs}",
+            "label": "验证资产",
+            "value": str(evaluation_asset_count),
+            "change": f"决策证据齐全 {snapshot.overview.e2_ready_runs}/{total_runs}",
             "tone": "warning",
         },
         {
@@ -538,7 +647,7 @@ def build_web_dashboard_bundle(
         risks.append(
             {
                 "id": item["id"],
-                "label": f"回流待处理：{item['sliceId']}",
+                "label": f"回流待处理：{item['sliceLabel']}",
                 "detail": item["reason"],
                 "href": "/feedback",
                 "tone": "warning",
@@ -549,7 +658,7 @@ def build_web_dashboard_bundle(
             risks.append(
                 {
                     "id": scorecard["id"],
-                    "label": f"评分卡未通过：{scorecard['sliceId']}",
+                    "label": f"评分卡未通过：{scorecard['sliceLabel']}",
                     "detail": f"{scorecard['candidateModel']} vs {scorecard['baselineModel']}",
                     "href": "/evaluation",
                     "tone": "danger" if scorecard["verdict"] == "fail" else "warning",
@@ -571,7 +680,7 @@ def build_web_dashboard_bundle(
         jobs.append(
             {
                 "id": f"job:snapshot:{snapshot_record['id']}",
-                "label": f"导出快照 {snapshot_record['id']}",
+                "label": f"导出快照 {snapshot_record['title']}",
                 "status": "completed",
                 "detail": f"{snapshot_record['builder']} · {snapshot_record['recordCount']} 条记录",
             }
@@ -580,7 +689,7 @@ def build_web_dashboard_bundle(
         jobs.append(
             {
                 "id": f"job:eval:{suite['id']}",
-                "label": f"评测套件 {suite['id']}",
+                "label": f"验证套件 {suite['title']}",
                 "status": "running" if suite["status"] == "active" else "completed",
                 "detail": f"{suite['kind']} · {suite['items']} 个样本",
             }
@@ -589,7 +698,7 @@ def build_web_dashboard_bundle(
         jobs.append(
             {
                 "id": f"job:feedback:{item['id']}",
-                "label": f"回流处理 {item['id']}",
+                "label": f"回流处理 {item['targetLabel']}",
                 "status": "queued",
                 "detail": item["reason"],
             }
@@ -604,7 +713,14 @@ def build_web_dashboard_bundle(
         default=None,
     )
     runs_with_identity = sum(1 for row in snapshot.recent_runs if row.task_instance_key is not None)
-    runs_with_semantics = sum(1 for row in snapshot.recent_runs if row.semantic_event_count > 0)
+    runs_with_task_labels = sum(
+        1
+        for row in snapshot.recent_runs
+        if row.task_family is not None and row.task_type is not None and row.task_instance_key is not None
+    )
+    runs_with_decision_signals = sum(
+        1 for row in snapshot.recent_runs if row.semantic_event_count > 0
+    )
     workflow_lanes = [
         {
             "id": "capture",
@@ -640,10 +756,10 @@ def build_web_dashboard_bundle(
             "id": "evaluate",
             "title": "4. 导出与验证",
             "description": "冻结数据批次，导出快照，并比较新旧模型效果。",
-            "count": snapshot.workflow_overview.ready_for_eval_runs,
-            "detail": "准备好的运行可以直接进入数据导出和验证流程。",
-            "href": "/datasets",
-            "actionLabel": "查看导出",
+            "count": evaluation_asset_count,
+            "detail": "已经生成的验证资产会直接出现在评测工作区。",
+            "href": "/evaluation",
+            "actionLabel": "查看验证资产",
             "tone": "success",
         },
     ]
@@ -658,7 +774,14 @@ def build_web_dashboard_bundle(
         "readyForDatasetRuns": snapshot.workflow_overview.ready_for_dataset_runs,
         "readyForEvalRuns": snapshot.workflow_overview.ready_for_eval_runs,
         "identityCoverage": format_percent(runs_with_identity / total_runs if total_runs else 0),
-        "semanticCoverage": format_percent(runs_with_semantics / total_runs if total_runs else 0),
+        "taskCoverage": format_percent(runs_with_task_labels / total_runs if total_runs else 0),
+        "decisionCoverage": format_percent(
+            runs_with_decision_signals / total_runs if total_runs else 0
+        ),
+        "semanticCoverage": format_percent(
+            runs_with_decision_signals / total_runs if total_runs else 0
+        ),
+        "evaluationAssetCount": evaluation_asset_count,
         "latestActivity": format_datetime(latest_activity),
         "latestSessionId": sessions_payload[0]["id"] if sessions_payload else "-",
     }
@@ -813,3 +936,99 @@ def _run_outcome(request_summaries: list[Any]) -> str:
     if any(summary.outcome == "open" for summary in request_summaries):
         return "open"
     return "succeeded"
+
+
+def humanize_identifier(value: str) -> str:
+    normalized = value.replace(".", " ").replace("_", " ").replace("-", " ").strip()
+    if not normalized:
+        return value
+    return " ".join(part.capitalize() for part in normalized.split())
+
+
+def task_label(task_family: str | None, task_type: str | None) -> str:
+    parts = [
+        humanize_identifier(value)
+        for value in (task_family, task_type)
+        if isinstance(value, str) and value
+    ]
+    return " / ".join(parts) if parts else "未命名任务"
+
+
+def run_label(task_family: str | None, task_type: str | None, run_id: str | None) -> str:
+    task_name = task_label(task_family, task_type)
+    return task_name if run_id is None else f"{task_name} · {run_id}"
+
+
+def build_snapshot_title(*, builder: str, cohort_name: str | None) -> str:
+    builder_name = builder.upper() if builder else "DATASET"
+    return f"{builder_name} · {cohort_name or '未命名批次'}"
+
+
+def string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def describe_time_range(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "时间范围待补充"
+    start = value.get("start")
+    end = value.get("end")
+    if isinstance(start, str) and isinstance(end, str):
+        return f"{format_datetime(start)} 到 {format_datetime(end)}"
+    return "时间范围待补充"
+
+
+def describe_selection_query(manifest: dict[str, Any]) -> str:
+    selection_query = manifest.get("selection_query")
+    if not isinstance(selection_query, dict):
+        return "筛选规则待补充"
+    task_family = selection_query.get("task_family")
+    task_type = selection_query.get("task_type")
+    source_channel = selection_query.get("source_channel")
+    summary = task_label(
+        task_family if isinstance(task_family, str) else None,
+        task_type if isinstance(task_type, str) else None,
+    )
+    if isinstance(source_channel, str) and source_channel:
+        return f"{summary} · 来源 {humanize_identifier(source_channel)}"
+    return summary
+
+
+def describe_quality_gate(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "质量门槛待补充"
+    quality = value.get("min_quality_confidence")
+    verifier = value.get("min_verifier_score")
+    parts: list[str] = []
+    if isinstance(quality, (int, float)) and not isinstance(quality, bool):
+        parts.append(f"质量 >= {float(quality):.2f}")
+    if isinstance(verifier, (int, float)) and not isinstance(verifier, bool):
+        parts.append(f"验证 >= {float(verifier):.2f}")
+    return " · ".join(parts) if parts else "质量门槛待补充"
+
+
+def describe_snapshot_split(manifest: dict[str, Any]) -> str:
+    split = manifest.get("split")
+    if not isinstance(split, dict):
+        return "切分策略待补充"
+    strategy = split.get("strategy")
+    counts = split.get("counts")
+    strategy_text = humanize_identifier(str(strategy)) if isinstance(strategy, str) and strategy else "切分策略"
+    if isinstance(counts, dict):
+        train = int(counts.get("train", 0))
+        val = int(counts.get("val", 0))
+        test = int(counts.get("test", 0))
+        return f"{strategy_text} · train {train} / val {val} / test {test}"
+    return strategy_text
+
+
+def describe_cohort_contract(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "未绑定批次约束"
+    expected_use = value.get("expected_use")
+    quality_gate = describe_quality_gate(value.get("quality_gate"))
+    if isinstance(expected_use, str) and expected_use:
+        return f"{humanize_identifier(expected_use)} · {quality_gate}"
+    return quality_gate

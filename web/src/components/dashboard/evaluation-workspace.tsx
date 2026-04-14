@@ -36,7 +36,7 @@ export function EvaluationWorkspace({ evalSuites, scorecards }: EvaluationWorksp
           return true;
         }
 
-        return [suite.id, suite.sliceId, suite.kind, suite.cohortId]
+        return [suite.id, suite.title, suite.sliceId, suite.sliceLabel, suite.kind, suite.cohortId, suite.cohortName]
           .join(" ")
           .toLowerCase()
           .includes(normalizedQuery);
@@ -72,12 +72,13 @@ export function EvaluationWorkspace({ evalSuites, scorecards }: EvaluationWorksp
       }
 
       return [
-        scorecard.id,
-        scorecard.candidateModel,
-        scorecard.baselineModel,
-        scorecard.sliceId,
-        scorecard.verdict
-      ]
+                      scorecard.id,
+                      scorecard.candidateModel,
+                      scorecard.baselineModel,
+                      scorecard.sliceId,
+                      scorecard.sliceLabel,
+                      scorecard.verdict
+                    ]
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery);
@@ -153,7 +154,7 @@ export function EvaluationWorkspace({ evalSuites, scorecards }: EvaluationWorksp
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="mono text-xs text-[color:var(--text-soft)]">{suite.id}</div>
-                      <div className="mt-2 text-lg font-medium">{suite.sliceId}</div>
+                      <div className="mt-2 text-lg font-medium">{suite.title ?? suite.sliceLabel ?? suite.sliceId}</div>
                       <div className="mt-1 text-sm text-[color:var(--text-muted)]">
                         {suite.kind} · {suite.items} 项 · 通过 {passCount}/{suiteCards.length}
                       </div>
@@ -169,11 +170,11 @@ export function EvaluationWorkspace({ evalSuites, scorecards }: EvaluationWorksp
 
       {currentSuite ? (
         <div className="space-y-6">
-          <Card eyebrow="当前 Suite" title={currentSuite.id} strong>
+          <Card eyebrow="当前 Suite" title={currentSuite.title ?? currentSuite.id} strong>
             <div className="grid gap-3 md:grid-cols-4">
               <div className="tech-highlight rounded-2xl p-4">
-                <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">Slice</div>
-                <div className="mt-3 text-xl font-semibold">{currentSuite.sliceId}</div>
+                <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">任务切片</div>
+                <div className="mt-3 text-xl font-semibold">{currentSuite.sliceLabel ?? currentSuite.sliceId}</div>
               </div>
               <div className="panel-soft rounded-2xl p-4">
                 <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">类型</div>
@@ -185,11 +186,11 @@ export function EvaluationWorkspace({ evalSuites, scorecards }: EvaluationWorksp
               </div>
               <div className="panel-soft rounded-2xl p-4">
                 <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">来源 Cohort</div>
-                <div className="mt-3 text-xl font-semibold">{currentSuite.cohortId}</div>
+                <div className="mt-3 text-xl font-semibold">{currentSuite.cohortName ?? currentSuite.cohortId}</div>
               </div>
             </div>
             <div className="mt-4 rounded-2xl bg-white/70 px-4 py-3 text-sm text-[color:var(--text-muted)]">
-              {SUITE_COPY[currentSuite.sliceId] ?? "当前 suite 用于验证这个 slice 是否具备稳定替代价值。"}
+              {SUITE_COPY[currentSuite.sliceId] ?? "当前 suite 用于验证这个任务切片是否具备稳定替代价值。"}
             </div>
             <div className="mt-5 flex flex-wrap gap-3">
               <Button href={`/evaluation/${currentSuite.id}`} variant="primary">打开 Suite 详情</Button>
@@ -218,7 +219,7 @@ export function EvaluationWorkspace({ evalSuites, scorecards }: EvaluationWorksp
                           <div>
                             <div className="mono text-xs text-[color:var(--text-soft)]">{scorecard.id}</div>
                             <div className="mt-2 text-sm text-[color:var(--text-muted)]">
-                              {scorecard.candidateModel} vs {scorecard.baselineModel}
+                              {scorecard.sliceLabel ?? scorecard.sliceId} · {scorecard.candidateModel} vs {scorecard.baselineModel}
                             </div>
                           </div>
                           <Badge tone={genericStatusTone(scorecard.verdict)}>{genericStatusLabel(scorecard.verdict)}</Badge>
@@ -269,7 +270,7 @@ export function EvaluationWorkspace({ evalSuites, scorecards }: EvaluationWorksp
                     <div className="rounded-2xl bg-white/70 p-4">
                       <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">回退信号</div>
                       <div className="mt-3 text-sm text-[color:var(--text-muted)]">
-                        Fallback {selectedScorecard.fallbackRate} · Slice {selectedScorecard.sliceId}
+                        Fallback {selectedScorecard.fallbackRate} · {selectedScorecard.sliceLabel ?? selectedScorecard.sliceId}
                       </div>
                     </div>
                   </div>

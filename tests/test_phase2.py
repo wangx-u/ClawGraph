@@ -488,6 +488,95 @@ class Phase2WorkflowTest(unittest.TestCase):
             self.assertIsNotNone(payload["promotion"])
             self.assertEqual(payload["promotion"]["decision"], "promote")
 
+    def test_phase2_cli_auto_derives_scorecard_from_score_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_uri = f"sqlite:///{Path(tempdir) / 'facts.db'}"
+            store = SQLiteFactStore(store_uri)
+            self._append_seed_run(store, run_id="run_1", session_id="session_1")
+            self._append_seed_run(store, run_id="run_2", session_id="session_2")
+            for run_id, session_id, instance_key, template_hash, score_value in (
+                ("run_1", "session_1", "task-1", "tmpl-1", 1.0),
+                ("run_2", "session_2", "task-2", "tmpl-2", 1.0),
+            ):
+                store.append_artifact(
+                    new_artifact_record(
+                        artifact_type="annotation",
+                        target_ref=f"run:{run_id}",
+                        producer="seed.annotation",
+                        session_id=session_id,
+                        run_id=run_id,
+                        confidence=0.95,
+                        payload={
+                            "annotation_kind": "e1",
+                            "task_family": "captured_agent_task",
+                            "task_type": "generic_proxy_capture",
+                            "task_template_hash": template_hash,
+                            "task_instance_key": instance_key,
+                            "verifier_name": "seed-judge",
+                            "verifier_score": 0.95,
+                            "quality_confidence": 0.95,
+                            "taxonomy_version": "taxonomy.v1",
+                            "annotation_version": "judge.v1",
+                            "source_channel": "captured",
+                            "review_reasons": [],
+                        },
+                    )
+                )
+                store.append_artifact(
+                    new_artifact_record(
+                        artifact_type="score",
+                        target_ref=f"run:{run_id}",
+                        producer="seed.eval",
+                        session_id=session_id,
+                        run_id=run_id,
+                        confidence=0.95,
+                        payload={
+                            "score": score_value,
+                            "label": score_value >= 1.0,
+                            "metric_name": "benchmark_pass",
+                        },
+                    )
+                )
+
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "clawgraph",
+                    "phase2",
+                    "run",
+                    "--store",
+                    store_uri,
+                    "--session",
+                    "session_1",
+                    "--run-id",
+                    "run_1",
+                    "--selection-scope",
+                    "slice",
+                    "--builder",
+                    "sft",
+                    "--holdout-fraction",
+                    "0.5",
+                    "--create-eval-suite",
+                    "--suite-kind",
+                    "offline_test",
+                    "--output-dir",
+                    str(Path(tempdir) / "out"),
+                    "--json",
+                ],
+            ), redirect_stdout(buffer):
+                return_code = main()
+
+            self.assertEqual(return_code, 0)
+            payload = json.loads(buffer.getvalue())
+            self.assertIsNotNone(payload["eval_suite"])
+            self.assertIsNotNone(payload["scorecard"])
+            self.assertEqual(payload["scorecard"]["metrics"]["task_success_rate"], 1.0)
+            self.assertEqual(payload["scorecard"]["verdict"], "pass")
+            self.assertIsNotNone(payload["promotion"])
+            self.assertEqual(payload["promotion"]["stage"], "offline")
+            self.assertEqual(payload["promotion"]["decision"], "promote")
+
     @staticmethod
     def _seed_facts() -> list:
         request = new_fact_event(

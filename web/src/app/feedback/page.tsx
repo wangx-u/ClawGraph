@@ -1,27 +1,29 @@
 import { getDashboardBundle } from "@/lib/data-source";
-import { genericStatusLabel, genericStatusTone } from "@/lib/presenters";
+import { genericStatusLabel, genericStatusTone, workflowStageLabel } from "@/lib/presenters";
+import { confirmRunByHuman, markFeedbackReviewed, resolveFeedback } from "@/app/feedback/actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { DataTable } from "@/components/ui/data-table";
 import { PageHeader } from "@/components/ui/page-header";
 
 export default async function FeedbackPage() {
   const {
-    bundle: { cohorts, feedbackItems }
+    bundle: { cohorts, feedbackItems },
+    meta
   } = await getDashboardBundle();
   const cohortHref = cohorts[0] ? `/curation/cohorts/${cohorts[0].id}` : "/curation/candidates";
   const queuedCount = feedbackItems.filter((item) => item.status === "queued").length;
   const reviewedCount = feedbackItems.filter((item) => item.status === "reviewed").length;
   const resolvedCount = feedbackItems.filter((item) => item.status === "resolved").length;
+  const canMutate = meta.provider === "local-store";
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="人工复核"
         description="把低置信、失败和分歧样本送回复查、数据准备或数据筛选，形成可追溯的闭环。"
-        primaryAction={<Button href="/flows/review-feedback" variant="primary">处理回流流程</Button>}
-        secondaryAction={<Button href="/sessions" variant="secondary">打开会话收件箱</Button>}
+        primaryAction={<Button href="/sessions" variant="primary">打开会话收件箱</Button>}
+        secondaryAction={<Button href={cohortHref} variant="secondary">查看当前批次</Button>}
       />
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -30,36 +32,86 @@ export default async function FeedbackPage() {
         <Card eyebrow="已关闭" title={String(resolvedCount)}>已完成处理，不再阻塞当前流程。</Card>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <Card eyebrow="回流队列" title="开放闭环事项" strong>
-          <DataTable
-            headers={["回流单", "来源", "目标", "原因", "切片", "状态", "说明"]}
-            rows={feedbackItems.map((item) => [
-              <span className="mono text-xs text-[color:var(--text-soft)]" key={`${item.id}-id`}>{item.id}</span>,
-              item.source,
-              <span className="mono text-xs text-[color:var(--text-soft)]" key={`${item.id}-target`}>{item.targetRef}</span>,
-              item.reason,
-              item.sliceId,
-              <Badge key={`${item.id}-status`} tone={genericStatusTone(item.status)}>{genericStatusLabel(item.status)}</Badge>,
-              item.resolutionNote ?? item.reviewer ?? "等待处理"
-            ])}
-          />
+      {!canMutate ? (
+        <Card eyebrow="当前模式" title="此数据源暂为只读" strong>
+          <p className="text-sm leading-6 text-[color:var(--text-muted)]">
+            当前页面连接的是远端 HTTP bundle。浏览器内直接 resolve / override 需要远端 mutation API；
+            在本地 store 模式下这些按钮会自动可用。
+          </p>
         </Card>
+      ) : null}
 
-        <Card eyebrow="分流动作" title="将选中项送往">
-          <div className="space-y-3">
-            {[
-              ["送回会话收件箱", "/sessions"],
-              ["送到数据准备页面", "/supervision"],
-              ["送到数据筛选页面", "/curation/candidates"],
-              ["查看当前 Cohort", cohortHref]
-            ].map(([label, href]) => (
-              <Button className="w-full justify-start" href={href} key={label} variant="secondary">
-                {label}
-              </Button>
-            ))}
-          </div>
-        </Card>
+      <div className="grid gap-4">
+        {feedbackItems.map((item) => (
+          <Card
+            action={
+              <Badge tone={genericStatusTone(item.status)}>
+                {genericStatusLabel(item.status)}
+              </Badge>
+            }
+            eyebrow={item.sliceLabel ?? item.sliceId}
+            key={item.id}
+            strong={item.status === "queued"}
+            title={item.targetLabel ?? item.targetRef}
+          >
+            <div className="space-y-4">
+              <p className="text-sm leading-6 text-[color:var(--text-muted)]">{item.reason}</p>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+                  <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">任务</div>
+                  <div className="mt-2">{item.taskLabel ?? "待识别"}</div>
+                </div>
+                <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+                  <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">流程阶段</div>
+                  <div className="mt-2">{workflowStageLabel(item.stage ?? undefined)}</div>
+                </div>
+                <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+                  <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">处理记录</div>
+                  <div className="mt-2">{item.resolutionNote ?? item.reviewer ?? "等待处理"}</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                {canMutate && item.status === "queued" && item.sessionId && item.runId ? (
+                  <form action={confirmRunByHuman}>
+                    <input name="feedbackId" type="hidden" value={item.id} />
+                    <input name="sessionId" type="hidden" value={item.sessionId} />
+                    <input name="runId" type="hidden" value={item.runId} />
+                    <Button type="submit" variant="primary">人工确认并入池</Button>
+                  </form>
+                ) : null}
+
+                {canMutate && item.status === "queued" ? (
+                  <form action={markFeedbackReviewed}>
+                    <input name="feedbackId" type="hidden" value={item.id} />
+                    <Button type="submit" variant="secondary">标记已人工确认</Button>
+                  </form>
+                ) : null}
+
+                {canMutate && item.status !== "resolved" ? (
+                  <form action={resolveFeedback}>
+                    <input name="feedbackId" type="hidden" value={item.id} />
+                    <Button type="submit" variant="ghost">关闭当前事项</Button>
+                  </form>
+                ) : null}
+
+                {item.sessionId && item.runId ? (
+                  <Button href={`/sessions/${item.sessionId}/runs/${item.runId}/replay`} variant="secondary">
+                    查看回放
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </Card>
+        ))}
+
+        {!feedbackItems.length ? (
+          <Card eyebrow="回流队列" title="当前没有待处理事项" strong>
+            <p className="text-sm leading-6 text-[color:var(--text-muted)]">
+              新的低置信或失败样本会自动出现在这里，人工处理后会直接回写到同一份 store。
+            </p>
+          </Card>
+        ) : null}
       </div>
     </div>
   );

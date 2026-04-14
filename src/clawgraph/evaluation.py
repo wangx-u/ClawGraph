@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from clawgraph.curation import SliceReviewPlan, preview_slice_review_queue
+from clawgraph.graph import build_request_span_summaries
 from clawgraph.protocol.factories import (
     new_eval_suite_record,
     new_feedback_queue_record,
@@ -13,12 +14,19 @@ from clawgraph.protocol.factories import (
     new_scorecard_record,
 )
 from clawgraph.protocol.models import (
+    ArtifactRecord,
     EvalSuiteRecord,
+    FactEvent,
     FeedbackQueueRecord,
     PromotionDecisionRecord,
     ScorecardRecord,
 )
 from clawgraph.store import SQLiteFactStore
+
+DEFAULT_AUTO_SCORECARD_THRESHOLDS: dict[str, dict[str, float | str]] = {
+    "task_success_rate": {"op": "gte", "value": 0.8},
+    "verifier_pass_rate": {"op": "gte", "value": 0.8},
+}
 
 
 @dataclass(slots=True)
@@ -143,6 +151,7 @@ def record_scorecard(
     baseline_model: str,
     metrics: dict[str, Any],
     thresholds: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
 ) -> ScorecardRecord:
     """Create and persist one scorecard with a derived verdict."""
 
@@ -159,6 +168,7 @@ def record_scorecard(
         verdict=verdict,
         metrics=metrics,
         thresholds=thresholds,
+        metadata=metadata,
     )
     store_instance.append_scorecard(scorecard)
     return scorecard
@@ -337,6 +347,95 @@ def update_feedback_queue_status(
     )
 
 
+def derive_eval_scorecard_inputs(
+    *,
+    store_uri: str | None = None,
+    store: SQLiteFactStore | None = None,
+    eval_suite_id: str,
+    thresholds: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Derive one scorecard payload from generic run-level score signals."""
+
+    store_instance = store or SQLiteFactStore(str(store_uri))
+    suite = store_instance.get_eval_suite(eval_suite_id)
+    if suite is None:
+        raise ValueError(f"eval suite not found: {eval_suite_id}")
+    if suite.cohort_id is None:
+        raise ValueError(f"eval suite {eval_suite_id} is missing cohort_id")
+
+    members = store_instance.list_cohort_members(suite.cohort_id, slice_id=suite.slice_id)
+    if not members:
+        raise ValueError(f"eval suite {eval_suite_id} has no cohort members")
+
+    score_values: list[float] = []
+    verifier_values: list[float] = []
+    latencies_ms: list[float] = []
+    fallback_count = 0
+    score_artifact_count = 0
+
+    for member in members:
+        run_artifacts = store_instance.list_artifacts(
+            session_id=member.session_id,
+            run_id=member.run_id,
+            latest_only=True,
+        )
+        run_facts = store_instance.list_facts(
+            session_id=member.session_id,
+            run_id=member.run_id,
+        )
+        score_value = _resolve_run_score_value(run_artifacts)
+        if score_value is not None:
+            score_values.append(score_value)
+            score_artifact_count += 1
+        verifier_value = _resolve_run_verifier_value(
+            artifacts=run_artifacts,
+            default=member.verifier_score,
+        )
+        if verifier_value is not None:
+            verifier_values.append(verifier_value)
+        request_summaries = build_request_span_summaries(run_facts, run_artifacts)
+        latencies_ms.extend(
+            float(summary.total_latency_ms)
+            for summary in request_summaries
+            if summary.total_latency_ms is not None
+        )
+        if any(_semantic_kind(fact) == "fallback_declared" for fact in run_facts):
+            fallback_count += 1
+
+    if not score_values:
+        raise ValueError(
+            f"eval suite {eval_suite_id} has no numeric score artifacts to derive a scorecard"
+        )
+
+    resolved_thresholds = dict(thresholds or DEFAULT_AUTO_SCORECARD_THRESHOLDS)
+    metrics: dict[str, Any] = {
+        "task_success_rate": round(sum(score_values) / len(score_values), 4),
+        "verifier_pass_rate": round(
+            sum(verifier_values) / len(verifier_values)
+            if verifier_values
+            else sum(score_values) / len(score_values),
+            4,
+        ),
+        "fallback_rate": round(fallback_count / len(members), 4),
+        "member_count": len(members),
+        "scored_member_count": len(score_values),
+        "score_artifact_count": score_artifact_count,
+    }
+    if latencies_ms:
+        metrics["p95_latency"] = round(_percentile(latencies_ms, 95), 2)
+        resolved_thresholds.setdefault("p95_latency", {"op": "lte", "value": 5000})
+
+    metadata = {
+        "source": "auto_derived",
+        "derived_from": {
+            "score_artifacts": score_artifact_count,
+            "latency_samples": len(latencies_ms),
+            "fallback_runs": fallback_count,
+        },
+    }
+    return metrics, resolved_thresholds, metadata
+
+
 def _resolve_scorecard_verdict(
     *,
     metrics: dict[str, Any],
@@ -361,6 +460,68 @@ def _resolve_scorecard_verdict(
         if op not in {"gte", "lte"}:
             return "hold"
     return "pass"
+
+
+def _resolve_run_score_value(artifacts: list[ArtifactRecord]) -> float | None:
+    for artifact in _sorted_active_score_artifacts(artifacts):
+        payload = artifact.payload
+        for key in ("score", "reward", "value"):
+            value = payload.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value)
+        label = payload.get("label")
+        if isinstance(label, bool):
+            return 1.0 if label else 0.0
+    return None
+
+
+def _resolve_run_verifier_value(
+    *,
+    artifacts: list[ArtifactRecord],
+    default: float | None = None,
+) -> float | None:
+    for artifact in _sorted_active_score_artifacts(artifacts):
+        for key in ("verifier_score", "verifier_pass_rate", "pass_rate"):
+            value = artifact.payload.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value)
+    return default
+
+
+def _sorted_active_score_artifacts(artifacts: list[ArtifactRecord]) -> list[ArtifactRecord]:
+    return sorted(
+        [
+            artifact
+            for artifact in artifacts
+            if artifact.status == "active" and artifact.artifact_type == "score"
+        ],
+        key=lambda artifact: (
+            artifact.created_at.isoformat() if artifact.created_at is not None else "",
+            artifact.artifact_id,
+        ),
+        reverse=True,
+    )
+
+
+def _semantic_kind(fact: FactEvent) -> str | None:
+    if fact.kind != "semantic_event":
+        return None
+    value = fact.payload.get("semantic_kind")
+    return value if isinstance(value, str) and value else None
+
+
+def _percentile(values: list[float], percentile: int) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    if len(ordered) == 1:
+        return ordered[0]
+    index = max(0, min(len(ordered) - 1, round((percentile / 100) * (len(ordered) - 1))))
+    return ordered[index]
 
 
 def _training_overlap(

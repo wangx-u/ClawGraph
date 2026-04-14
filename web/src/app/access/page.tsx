@@ -55,11 +55,12 @@ export default async function AccessPage() {
           <div className="grid gap-3 md:grid-cols-2">
             {[
               `请求归属清晰度：${ingestSummary?.identityCoverage ?? "-"}`,
-              `任务识别清晰度：${ingestSummary?.semanticCoverage ?? "-"}`,
+              `任务标签覆盖率：${ingestSummary?.taskCoverage ?? ingestSummary?.semanticCoverage ?? "-"}`,
+              `决策语义覆盖率：${ingestSummary?.decisionCoverage ?? ingestSummary?.semanticCoverage ?? "-"}`,
               `待补基础标签运行：${ingestSummary?.needsAnnotationRuns ?? 0}`,
               `待人工确认运行：${ingestSummary?.needsReviewRuns ?? 0}`,
               `可导出运行：${ingestSummary?.readyForDatasetRuns ?? 0}`,
-              `可评估运行：${ingestSummary?.readyForEvalRuns ?? 0}`,
+              `已生成验证资产：${ingestSummary?.evaluationAssetCount ?? 0}`,
               `接入流程阶段：${workflowLanes?.find((lane) => lane.id === "capture")?.count ?? 0} 条运行正在采集`,
               `数据源模式：${meta.statusText}`
             ].map((item) => (
