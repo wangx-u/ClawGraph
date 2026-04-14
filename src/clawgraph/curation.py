@@ -81,6 +81,31 @@ class CohortFreezeResult:
         }
 
 
+@dataclass(slots=True)
+class SliceReviewPlan:
+    """Preview of run-level review items for one slice candidate pool."""
+
+    slice_record: SliceRecord
+    purpose: str
+    quality_threshold: float
+    verifier_threshold: float
+    candidates: list[CandidateRun]
+    eligible_candidates: list[CandidateRun]
+    review_queue: list[dict[str, Any]]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "slice": self.slice_record.to_dict(),
+            "purpose": self.purpose,
+            "quality_threshold": self.quality_threshold,
+            "verifier_threshold": self.verifier_threshold,
+            "candidate_count": len(self.candidates),
+            "eligible_count": len(self.eligible_candidates),
+            "review_count": len(self.review_queue),
+            "review_queue": list(self.review_queue),
+        }
+
+
 def list_slice_candidates(
     *,
     store_uri: str | None = None,
@@ -169,6 +194,82 @@ def list_slice_candidates(
             )
         )
     return slice_record, candidates
+
+
+def preview_slice_review_queue(
+    *,
+    store_uri: str | None = None,
+    store: SQLiteFactStore | None = None,
+    slice_id: str,
+    session: str | None = None,
+    run_id: str | None = None,
+    task_instance_key: str | None = None,
+    task_template_hash: str | None = None,
+    min_quality_confidence: float | None = None,
+    min_verifier_score: float | None = None,
+    source_channel: str | None = None,
+    limit: int | None = None,
+    purpose: str | None = None,
+) -> SliceReviewPlan:
+    """Preview the review queue implied by one slice candidate pool."""
+
+    slice_record, candidates = list_slice_candidates(
+        store_uri=store_uri,
+        store=store,
+        slice_id=slice_id,
+        session=session,
+        run_id=run_id,
+        task_instance_key=task_instance_key,
+        task_template_hash=task_template_hash,
+        min_quality_confidence=min_quality_confidence,
+        min_verifier_score=min_verifier_score,
+        source_channel=source_channel,
+        limit=limit,
+    )
+    resolved_purpose = _resolve_purpose(slice_record=slice_record, purpose=purpose)
+    quality_threshold = _default_quality_threshold(
+        slice_record=slice_record,
+        explicit=min_quality_confidence,
+        purpose=resolved_purpose,
+    )
+    verifier_threshold = _default_verifier_threshold(
+        slice_record=slice_record,
+        explicit=min_verifier_score,
+        purpose=resolved_purpose,
+    )
+
+    review_queue: list[dict[str, Any]] = []
+    eligible_candidates: list[CandidateRun] = []
+    for candidate in candidates:
+        review_reasons = _review_reasons(
+            candidate=candidate,
+            slice_record=slice_record,
+            quality_threshold=quality_threshold,
+            verifier_threshold=verifier_threshold,
+        )
+        if review_reasons:
+            review_queue.append(
+                {
+                    "slice_id": slice_record.slice_id,
+                    "session_id": candidate.session_id,
+                    "run_id": candidate.run_id,
+                    "task_instance_key": candidate.task_instance_key,
+                    "task_template_hash": candidate.task_template_hash,
+                    "reasons": review_reasons,
+                }
+            )
+            continue
+        eligible_candidates.append(candidate)
+
+    return SliceReviewPlan(
+        slice_record=slice_record,
+        purpose=resolved_purpose,
+        quality_threshold=quality_threshold,
+        verifier_threshold=verifier_threshold,
+        candidates=candidates,
+        eligible_candidates=eligible_candidates,
+        review_queue=review_queue,
+    )
 
 
 def freeze_cohort(
@@ -505,6 +606,13 @@ def _review_reasons(
     verifier_threshold: float,
 ) -> list[str]:
     reasons: list[str] = []
+    annotation_review_reasons = candidate.metadata.get("review_reasons")
+    if isinstance(annotation_review_reasons, list):
+        reasons.extend(
+            reason
+            for reason in annotation_review_reasons
+            if isinstance(reason, str) and reason
+        )
     if candidate.task_type in {"unknown", "new_subtype"}:
         reasons.append("unresolved_task_type")
     if candidate.quality_confidence < quality_threshold:
@@ -517,7 +625,7 @@ def _review_reasons(
         reasons.append("novel_path")
     if slice_record.default_use == "training_candidate" and candidate.source_channel == "shadow":
         reasons.append("shadow_only_candidate")
-    return reasons
+    return list(dict.fromkeys(reasons))
 
 
 def _sorted_candidates(candidates: list[CandidateRun]) -> list[CandidateRun]:

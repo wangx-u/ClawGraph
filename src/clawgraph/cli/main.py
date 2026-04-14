@@ -4,17 +4,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import time
 from pathlib import Path
+from typing import Any
 
 from clawgraph.artifacts import plan_artifact_bootstrap
 from clawgraph.bootstrap import bootstrap_openclaw_session
-from clawgraph.curation import freeze_cohort, list_slice_candidates
+from clawgraph.curation import freeze_cohort, list_slice_candidates, preview_slice_review_queue
+from clawgraph.dashboard import (
+    build_dashboard_snapshot,
+    inspect_run_workflow,
+    render_dashboard_snapshot,
+)
 from clawgraph.export import (
     build_dataset_readiness_summary,
     export_dataset,
     plan_dataset_export,
     plan_dataset_export_for_scope,
     render_dataset_readiness,
+)
+from clawgraph.evaluation import (
+    create_eval_suite_from_cohort,
+    enqueue_feedback,
+    record_promotion_decision,
+    record_scorecard,
+    sync_feedback_queue_from_slice_review,
+    update_feedback_queue_status,
 )
 from clawgraph.graph import (
     build_branch_inspect_summaries,
@@ -29,6 +45,8 @@ from clawgraph.graph import (
     render_session_inspect,
     render_session_replay,
 )
+from clawgraph.judge import plan_judge_annotation, plan_review_override
+from clawgraph.phase2 import run_phase2_workflow
 from clawgraph.protocol.factories import (
     new_artifact_record,
     new_semantic_event_fact,
@@ -60,14 +78,29 @@ def _resolve_session_id_for_run(*, store: SQLiteFactStore, run_id: str) -> str |
 
 
 def _load_json_argument(raw_value: str, *, label: str) -> dict:
+    payload = _load_json_value(raw_value, label=label)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return payload
+
+
+def _load_json_value(raw_value: str, *, label: str) -> Any:
     if raw_value.startswith("@"):
         payload_text = Path(raw_value[1:]).read_text(encoding="utf-8")
     else:
         payload_text = raw_value
-    payload = json.loads(payload_text)
-    if not isinstance(payload, dict):
-        raise ValueError(f"{label} must be a JSON object")
-    return payload
+    try:
+        return json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be valid JSON") from exc
+
+
+def _load_text_argument(raw_value: str | None) -> str | None:
+    if raw_value is None:
+        return None
+    if raw_value.startswith("@"):
+        return Path(raw_value[1:]).read_text(encoding="utf-8")
+    return raw_value
 
 
 def _resolve_target_ref(
@@ -291,6 +324,7 @@ def _build_parser() -> argparse.ArgumentParser:
     proxy.add_argument("--host", default="127.0.0.1")
     proxy.add_argument("--port", type=int, default=8080)
     proxy.add_argument("--auth-token")
+    proxy.add_argument("--upstream-api-key")
     proxy.add_argument("--max-request-body-bytes", type=int, default=1024 * 1024)
     proxy.add_argument("--max-response-body-bytes", type=int, default=4 * 1024 * 1024)
     proxy.add_argument("--max-capture-bytes", type=int, default=16 * 1024)
@@ -348,6 +382,29 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_branch.add_argument("--branch-id")
     inspect_branch.add_argument("--store", default=DEFAULT_STORE_URI)
     inspect_branch.add_argument("--json", action="store_true")
+
+    inspect_workflow = inspect_subparsers.add_parser(
+        "workflow",
+        help="Inspect the phase-2 workflow/gate status for one run",
+    )
+    inspect_workflow.add_argument("--session", default="latest")
+    inspect_workflow.add_argument("--run-id")
+    inspect_workflow.add_argument("--store", default=DEFAULT_STORE_URI)
+    inspect_workflow.add_argument("--builder")
+    inspect_workflow.add_argument("--json", action="store_true")
+
+    inspect_dashboard = inspect_subparsers.add_parser(
+        "dashboard",
+        help="Inspect a dashboard-oriented snapshot across execution and governance objects",
+    )
+    inspect_dashboard.add_argument("--store", default=DEFAULT_STORE_URI)
+    inspect_dashboard.add_argument("--builder")
+    inspect_dashboard.add_argument("--session-limit", type=int, default=10)
+    inspect_dashboard.add_argument("--run-limit", type=int, default=20)
+    inspect_dashboard.add_argument("--watch", action="store_true")
+    inspect_dashboard.add_argument("--interval-seconds", type=float, default=2.0)
+    inspect_dashboard.add_argument("--iterations", type=int)
+    inspect_dashboard.add_argument("--json", action="store_true")
 
     list_parser = subparsers.add_parser("list", help="List sessions, requests, or facts")
     list_subparsers = list_parser.add_subparsers(dest="list_command")
@@ -481,6 +538,54 @@ def _build_parser() -> argparse.ArgumentParser:
     semantic_append.add_argument("--task-id")
     semantic_append.add_argument("--branch-id")
 
+    judge = subparsers.add_parser("judge", help="Plan and append judge-produced annotations")
+    judge_subparsers = judge.add_subparsers(dest="judge_command")
+    judge_annotate = judge_subparsers.add_parser(
+        "annotate",
+        help="Plan one run-level E1 annotation from a heuristic or OpenAI-compatible judge",
+    )
+    judge_annotate.add_argument("--store", default=DEFAULT_STORE_URI)
+    judge_annotate.add_argument("--session", default="latest")
+    judge_annotate.add_argument("--run-id")
+    judge_annotate.add_argument("--provider", default="heuristic")
+    judge_annotate.add_argument("--model")
+    judge_annotate.add_argument("--api-base")
+    judge_annotate.add_argument("--api-key")
+    judge_annotate.add_argument("--api-key-env", default="OPENAI_API_KEY")
+    judge_annotate.add_argument("--producer")
+    judge_annotate.add_argument("--version")
+    judge_annotate.add_argument("--status", default="active")
+    judge_annotate.add_argument("--task-family")
+    judge_annotate.add_argument("--task-type")
+    judge_annotate.add_argument("--taxonomy-version")
+    judge_annotate.add_argument("--annotation-version")
+    judge_annotate.add_argument("--source-channel")
+    judge_annotate.add_argument("--task-instance-key")
+    judge_annotate.add_argument("--instructions")
+    judge_annotate.add_argument("--supersedes-artifact-id")
+    judge_annotate.add_argument("--timeout-seconds", type=float, default=60.0)
+    judge_annotate.add_argument("--dry-run", action="store_true")
+    judge_annotate.add_argument("--json", action="store_true")
+
+    judge_override = judge_subparsers.add_parser(
+        "override",
+        help="Append one manual override annotation for a run",
+    )
+    judge_override.add_argument("--store", default=DEFAULT_STORE_URI)
+    judge_override.add_argument("--session", default="latest")
+    judge_override.add_argument("--run-id")
+    judge_override.add_argument("--producer", default="human-review")
+    judge_override.add_argument("--version")
+    judge_override.add_argument("--status", default="active")
+    judge_override.add_argument("--payload", default="{}")
+    judge_override.add_argument("--review-note")
+    judge_override.add_argument("--preserve-review-reasons", action="store_true")
+    judge_override.add_argument("--feedback-status", choices=["reviewed", "resolved"])
+    judge_override.add_argument("--slice-id")
+    judge_override.add_argument("--reviewer")
+    judge_override.add_argument("--dry-run", action="store_true")
+    judge_override.add_argument("--json", action="store_true")
+
     artifact = subparsers.add_parser("artifact", help="Append or list artifacts")
     artifact_subparsers = artifact.add_subparsers(dest="artifact_command")
     artifact_append = artifact_subparsers.add_parser("append", help="Append an artifact")
@@ -523,6 +628,97 @@ def _build_parser() -> argparse.ArgumentParser:
     artifact_bootstrap.add_argument("--dry-run", action="store_true")
     artifact_bootstrap.add_argument("--json", action="store_true")
 
+    feedback = subparsers.add_parser("feedback", help="Inspect and sync review queue items")
+    feedback_subparsers = feedback.add_subparsers(dest="feedback_command")
+
+    feedback_enqueue = feedback_subparsers.add_parser("enqueue", help="Append one feedback queue item")
+    feedback_enqueue.add_argument("--store", default=DEFAULT_STORE_URI)
+    feedback_enqueue.add_argument("--slice-id", required=True)
+    feedback_enqueue.add_argument("--source", required=True)
+    feedback_enqueue.add_argument("--target-ref", required=True)
+    feedback_enqueue.add_argument("--reason", required=True)
+    feedback_enqueue.add_argument("--payload", default="{}")
+    feedback_enqueue.add_argument("--json", action="store_true")
+
+    feedback_list = feedback_subparsers.add_parser("list", help="List feedback queue items")
+    feedback_list.add_argument("--store", default=DEFAULT_STORE_URI)
+    feedback_list.add_argument("--slice-id")
+    feedback_list.add_argument("--status")
+    feedback_list.add_argument("--json", action="store_true")
+
+    feedback_sync = feedback_subparsers.add_parser(
+        "sync",
+        help="Preview or append feedback queue items from a slice review queue",
+    )
+    feedback_sync.add_argument("--store", default=DEFAULT_STORE_URI)
+    feedback_sync.add_argument("--slice-id", required=True)
+    feedback_sync.add_argument("--source", default="auto_review")
+    feedback_sync.add_argument("--session")
+    feedback_sync.add_argument("--run-id")
+    feedback_sync.add_argument("--task-instance-key")
+    feedback_sync.add_argument("--task-template-hash")
+    feedback_sync.add_argument("--min-quality-confidence", type=float)
+    feedback_sync.add_argument("--min-verifier-score", type=float)
+    feedback_sync.add_argument("--source-channel")
+    feedback_sync.add_argument("--limit", type=int)
+    feedback_sync.add_argument("--purpose")
+    feedback_sync.add_argument("--dry-run", action="store_true")
+    feedback_sync.add_argument("--json", action="store_true")
+
+    feedback_resolve = feedback_subparsers.add_parser(
+        "resolve",
+        help="Mark feedback queue items as reviewed or resolved",
+    )
+    feedback_resolve.add_argument("--store", default=DEFAULT_STORE_URI)
+    feedback_resolve.add_argument("--feedback-id")
+    feedback_resolve.add_argument("--slice-id")
+    feedback_resolve.add_argument("--target-ref")
+    feedback_resolve.add_argument("--from-status")
+    feedback_resolve.add_argument("--status", default="resolved")
+    feedback_resolve.add_argument("--note")
+    feedback_resolve.add_argument("--reviewer")
+    feedback_resolve.add_argument("--json", action="store_true")
+
+    eval_parser = subparsers.add_parser("eval", help="Create eval suites and persist evaluation results")
+    eval_subparsers = eval_parser.add_subparsers(dest="eval_command")
+
+    eval_create_suite = eval_subparsers.add_parser(
+        "create-suite",
+        help="Create one eval suite from a frozen evaluation cohort",
+    )
+    eval_create_suite.add_argument("--store", default=DEFAULT_STORE_URI)
+    eval_create_suite.add_argument("--slice-id", required=True)
+    eval_create_suite.add_argument("--suite-kind", required=True)
+    eval_create_suite.add_argument("--cohort-id", required=True)
+    eval_create_suite.add_argument("--dataset-snapshot-id")
+    eval_create_suite.add_argument("--name")
+    eval_create_suite.add_argument("--json", action="store_true")
+
+    eval_scorecard = eval_subparsers.add_parser(
+        "record-scorecard",
+        help="Record one evaluation scorecard",
+    )
+    eval_scorecard.add_argument("--store", default=DEFAULT_STORE_URI)
+    eval_scorecard.add_argument("--eval-suite-id", required=True)
+    eval_scorecard.add_argument("--candidate-model", required=True)
+    eval_scorecard.add_argument("--baseline-model", required=True)
+    eval_scorecard.add_argument("--metrics", required=True)
+    eval_scorecard.add_argument("--thresholds", required=True)
+    eval_scorecard.add_argument("--json", action="store_true")
+
+    eval_promotion = eval_subparsers.add_parser(
+        "decide-promotion",
+        help="Persist one promotion decision from a scorecard",
+    )
+    eval_promotion.add_argument("--store", default=DEFAULT_STORE_URI)
+    eval_promotion.add_argument("--scorecard-id", required=True)
+    eval_promotion.add_argument("--stage", required=True)
+    eval_promotion.add_argument("--coverage-policy-version", required=True)
+    eval_promotion.add_argument("--summary", required=True)
+    eval_promotion.add_argument("--rollback-conditions", default="[]")
+    eval_promotion.add_argument("--decision")
+    eval_promotion.add_argument("--json", action="store_true")
+
     export = subparsers.add_parser("export", help="Export reusable datasets")
     export_subparsers = export.add_subparsers(dest="export_command")
     dataset = export_subparsers.add_parser("dataset", help="Export a dataset")
@@ -558,6 +754,58 @@ def _build_parser() -> argparse.ArgumentParser:
     pipeline_run.add_argument("--dry-run", action="store_true")
     pipeline_run.add_argument("--json", action="store_true")
 
+    phase2 = subparsers.add_parser(
+        "phase2",
+        help="Run the full governance workflow from preparation through export and evaluation",
+    )
+    phase2_subparsers = phase2.add_subparsers(dest="phase2_command")
+    phase2_run = phase2_subparsers.add_parser(
+        "run",
+        help="Automate prepare, judge, review sync, cohort freeze, export, and optional evaluation",
+    )
+    phase2_run.add_argument("--store", default=DEFAULT_STORE_URI)
+    phase2_run.add_argument("--session", default="latest")
+    phase2_run.add_argument("--run-id")
+    phase2_run.add_argument("--selection-scope", default="run", choices=["run", "slice"])
+    phase2_run.add_argument("--slice-id")
+    phase2_run.add_argument("--slice-owner", default="clawgraph.phase2")
+    phase2_run.add_argument("--slice-default-use", default="training_candidate")
+    phase2_run.add_argument("--slice-risk-level", default="medium")
+    phase2_run.add_argument("--prepare-producer", default="clawgraph.prepare")
+    phase2_run.add_argument("--prepare-version", default="clawgraph.prepare.v1")
+    phase2_run.add_argument("--force-prepare", action="store_true")
+    phase2_run.add_argument("--judge-provider", default="heuristic")
+    phase2_run.add_argument("--judge-model")
+    phase2_run.add_argument("--judge-api-base")
+    phase2_run.add_argument("--judge-api-key")
+    phase2_run.add_argument("--judge-api-key-env", default="OPENAI_API_KEY")
+    phase2_run.add_argument("--judge-producer", default="clawgraph.judge")
+    phase2_run.add_argument("--judge-version")
+    phase2_run.add_argument("--judge-instructions")
+    phase2_run.add_argument("--force-judge", action="store_true")
+    phase2_run.add_argument("--builder", dest="builders", action="append")
+    phase2_run.add_argument("--output-dir", type=Path)
+    phase2_run.add_argument("--cohort-name")
+    phase2_run.add_argument("--holdout-fraction", type=float)
+    phase2_run.add_argument("--max-members-per-task-instance", type=int, default=1)
+    phase2_run.add_argument("--max-members-per-template", type=int)
+    phase2_run.add_argument("--min-quality-confidence", type=float)
+    phase2_run.add_argument("--min-verifier-score", type=float)
+    phase2_run.add_argument("--create-eval-suite", action="store_true")
+    phase2_run.add_argument("--suite-kind", default="offline_test")
+    phase2_run.add_argument("--eval-cohort-name")
+    phase2_run.add_argument("--eval-suite-name")
+    phase2_run.add_argument("--scorecard-metrics")
+    phase2_run.add_argument("--scorecard-thresholds")
+    phase2_run.add_argument("--candidate-model")
+    phase2_run.add_argument("--baseline-model")
+    phase2_run.add_argument("--promotion-stage")
+    phase2_run.add_argument("--coverage-policy-version")
+    phase2_run.add_argument("--promotion-summary")
+    phase2_run.add_argument("--feedback-source", default="phase2.auto_review")
+    phase2_run.add_argument("--dry-run", action="store_true")
+    phase2_run.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -566,6 +814,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "proxy":
+        upstream_api_key = args.upstream_api_key or os.getenv("CLAWGRAPH_UPSTREAM_API_KEY")
         run_proxy_server(
             ProxyConfig(
                 host=args.host,
@@ -573,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
                 store_uri=args.store,
                 model_upstream=args.model_upstream,
                 tool_upstream=args.tool_upstream,
+                upstream_api_key=upstream_api_key,
                 auth_token=args.auth_token,
                 max_request_body_bytes=args.max_request_body_bytes,
                 max_response_body_bytes=args.max_response_body_bytes,
@@ -995,6 +1245,166 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(str(exc)) from exc
         return 0
 
+    if args.command == "inspect" and args.inspect_command == "workflow":
+        try:
+            row = inspect_run_workflow(
+                store_uri=args.store,
+                session=args.session,
+                run_id=args.run_id,
+                builder=args.builder,
+            )
+            _print_output(row.to_dict() if args.json else _render_workflow_row(row))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "inspect" and args.inspect_command == "dashboard":
+        try:
+            if args.iterations is not None and args.iterations <= 0:
+                raise ValueError("--iterations must be greater than 0")
+            if args.interval_seconds <= 0:
+                raise ValueError("--interval-seconds must be greater than 0")
+            loop_count = args.iterations if args.watch else 1
+            iteration = 0
+            while True:
+                summary = build_dashboard_snapshot(
+                    store_uri=args.store,
+                    builder=args.builder,
+                    session_limit=args.session_limit,
+                    run_limit=args.run_limit,
+                )
+                if args.watch and not args.json:
+                    print("\033[2J\033[H", end="")
+                elif args.watch and iteration > 0:
+                    _print_output("")
+                _print_output(
+                    summary.to_dict() if args.json else render_dashboard_snapshot(summary)
+                )
+                iteration += 1
+                if not args.watch:
+                    break
+                if loop_count is not None and iteration >= loop_count:
+                    break
+                time.sleep(args.interval_seconds)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "judge" and args.judge_command == "annotate":
+        try:
+            store = SQLiteFactStore(args.store)
+            session_id, facts = _load_facts_for_scope(
+                store=store,
+                session_value=args.session,
+                run_id=args.run_id,
+                default_latest_run=True,
+            )
+            artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=facts[0].run_id,
+                latest_only=True,
+            )
+            plan = plan_judge_annotation(
+                facts=facts,
+                artifacts=artifacts,
+                producer=args.producer or f"clawgraph.judge.{args.provider}",
+                provider=args.provider,
+                version=args.version,
+                status=args.status,
+                model=args.model,
+                api_base=args.api_base,
+                api_key=args.api_key or os.getenv(args.api_key_env),
+                instructions=_load_text_argument(args.instructions),
+                task_family=args.task_family,
+                task_type=args.task_type,
+                taxonomy_version=args.taxonomy_version,
+                annotation_version=args.annotation_version,
+                source_channel=args.source_channel,
+                task_instance_key=args.task_instance_key,
+                supersedes_artifact_id=args.supersedes_artifact_id,
+                timeout_seconds=args.timeout_seconds,
+            )
+            persisted_artifacts = []
+            skipped_count = 0
+            if not args.dry_run:
+                persisted_artifacts, skipped_count = _persist_unique_artifacts(
+                    store=store,
+                    session_id=session_id,
+                    run_id=facts[0].run_id,
+                    artifacts=[plan.artifact],
+                )
+            payload = {
+                **plan.to_dict(),
+                "persisted": not args.dry_run and bool(persisted_artifacts),
+                "persisted_artifact_id": (
+                    persisted_artifacts[0].artifact_id if persisted_artifacts else None
+                ),
+                "skipped_duplicates": skipped_count,
+            }
+            _print_output(payload if args.json else _render_judge_plan(payload))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "judge" and args.judge_command == "override":
+        try:
+            store = SQLiteFactStore(args.store)
+            session_id, facts = _load_facts_for_scope(
+                store=store,
+                session_value=args.session,
+                run_id=args.run_id,
+                default_latest_run=True,
+            )
+            artifacts = store.list_artifacts(
+                session_id=session_id,
+                run_id=facts[0].run_id,
+                latest_only=True,
+            )
+            payload_patch = _load_json_argument(args.payload, label="override payload")
+            plan = plan_review_override(
+                facts=facts,
+                artifacts=artifacts,
+                producer=args.producer,
+                payload_patch=payload_patch,
+                version=args.version,
+                status=args.status,
+                review_note=_load_text_argument(args.review_note),
+                clear_review_reasons=not args.preserve_review_reasons,
+            )
+            persisted_artifacts = []
+            skipped_count = 0
+            feedback_updates = []
+            if not args.dry_run:
+                persisted_artifacts, skipped_count = _persist_unique_artifacts(
+                    store=store,
+                    session_id=session_id,
+                    run_id=facts[0].run_id,
+                    artifacts=[plan.artifact],
+                )
+                if args.feedback_status and persisted_artifacts:
+                    feedback_updates = update_feedback_queue_status(
+                        store=store,
+                        status=args.feedback_status,
+                        slice_id=args.slice_id,
+                        target_ref=f"run:{facts[0].run_id}",
+                        from_status="queued",
+                        note=_load_text_argument(args.review_note),
+                        reviewer=args.reviewer,
+                    )
+            payload = {
+                **plan.to_dict(),
+                "persisted": not args.dry_run and bool(persisted_artifacts),
+                "persisted_artifact_id": (
+                    persisted_artifacts[0].artifact_id if persisted_artifacts else None
+                ),
+                "skipped_duplicates": skipped_count,
+                "feedback_updates": [item.to_dict() for item in feedback_updates],
+            }
+            _print_output(payload if args.json else _render_judge_plan(payload))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
     if args.command == "artifact" and args.artifact_command == "append":
         try:
             payload = _load_json_argument(args.payload, label="artifact payload")
@@ -1065,6 +1475,95 @@ def main(argv: list[str] | None = None) -> int:
                 f"appended semantic event {semantic_fact.fact_id} "
                 f"kind={args.semantic_kind} session={args.session_id}"
             )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "feedback" and args.feedback_command == "enqueue":
+        try:
+            payload = _load_json_argument(args.payload, label="feedback payload")
+            feedback = enqueue_feedback(
+                store_uri=args.store,
+                slice_id=args.slice_id,
+                source=args.source,
+                target_ref=args.target_ref,
+                reason=args.reason,
+                payload=payload,
+            )
+            _print_output(
+                feedback.to_dict()
+                if args.json
+                else f"enqueued feedback {feedback.feedback_id} target={feedback.target_ref}"
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "feedback" and args.feedback_command == "list":
+        store = SQLiteFactStore(args.store)
+        items = store.list_feedback_queue(slice_id=args.slice_id, status=args.status)
+        _print_output(
+            [item.to_dict() for item in items]
+            if args.json
+            else _render_feedback_list(items)
+        )
+        return 0
+
+    if args.command == "feedback" and args.feedback_command == "sync":
+        try:
+            if args.dry_run:
+                plan = preview_slice_review_queue(
+                    store_uri=args.store,
+                    slice_id=args.slice_id,
+                    session=args.session,
+                    run_id=args.run_id,
+                    task_instance_key=args.task_instance_key,
+                    task_template_hash=args.task_template_hash,
+                    min_quality_confidence=args.min_quality_confidence,
+                    min_verifier_score=args.min_verifier_score,
+                    source_channel=args.source_channel,
+                    limit=args.limit,
+                    purpose=args.purpose,
+                )
+                payload = plan.to_dict()
+            else:
+                result = sync_feedback_queue_from_slice_review(
+                    store_uri=args.store,
+                    slice_id=args.slice_id,
+                    source=args.source,
+                    session=args.session,
+                    run_id=args.run_id,
+                    task_instance_key=args.task_instance_key,
+                    task_template_hash=args.task_template_hash,
+                    min_quality_confidence=args.min_quality_confidence,
+                    min_verifier_score=args.min_verifier_score,
+                    source_channel=args.source_channel,
+                    limit=args.limit,
+                    purpose=args.purpose,
+                )
+                payload = result.to_dict()
+            _print_output(payload if args.json else _render_feedback_sync(payload))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "feedback" and args.feedback_command == "resolve":
+        try:
+            updated = update_feedback_queue_status(
+                store_uri=args.store,
+                status=args.status,
+                feedback_id=args.feedback_id,
+                slice_id=args.slice_id,
+                target_ref=args.target_ref,
+                from_status=args.from_status,
+                note=_load_text_argument(args.note),
+                reviewer=args.reviewer,
+            )
+            payload = {
+                "updated_count": len(updated),
+                "items": [item.to_dict() for item in updated],
+            }
+            _print_output(payload if args.json else _render_feedback_resolution(payload))
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         return 0
@@ -1158,6 +1657,135 @@ def main(argv: list[str] | None = None) -> int:
                     skipped_count=skipped_count,
                 )
             )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "eval" and args.eval_command == "create-suite":
+        try:
+            suite = create_eval_suite_from_cohort(
+                store_uri=args.store,
+                slice_id=args.slice_id,
+                suite_kind=args.suite_kind,
+                cohort_id=args.cohort_id,
+                name=args.name,
+                dataset_snapshot_id=args.dataset_snapshot_id,
+            )
+            _print_output(
+                suite.to_dict()
+                if args.json
+                else f"created eval suite {suite.eval_suite_id} from cohort {suite.cohort_id}"
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "eval" and args.eval_command == "record-scorecard":
+        try:
+            metrics = _load_json_argument(args.metrics, label="metrics")
+            thresholds = _load_json_argument(args.thresholds, label="thresholds")
+            scorecard = record_scorecard(
+                store_uri=args.store,
+                eval_suite_id=args.eval_suite_id,
+                candidate_model=args.candidate_model,
+                baseline_model=args.baseline_model,
+                metrics=metrics,
+                thresholds=thresholds,
+            )
+            _print_output(
+                scorecard.to_dict()
+                if args.json
+                else f"recorded scorecard {scorecard.scorecard_id} verdict={scorecard.verdict}"
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "eval" and args.eval_command == "decide-promotion":
+        try:
+            rollback_conditions = _load_json_value(
+                args.rollback_conditions,
+                label="rollback_conditions",
+            )
+            decision = record_promotion_decision(
+                store_uri=args.store,
+                scorecard_id=args.scorecard_id,
+                stage=args.stage,
+                coverage_policy_version=args.coverage_policy_version,
+                summary=args.summary,
+                rollback_conditions=rollback_conditions
+                if isinstance(rollback_conditions, list)
+                else list(rollback_conditions.values())
+                if isinstance(rollback_conditions, dict)
+                else [],
+                decision=args.decision,
+            )
+            _print_output(
+                decision.to_dict()
+                if args.json
+                else f"recorded promotion decision {decision.decision} for scorecard {decision.scorecard_id}"
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "phase2" and args.phase2_command == "run":
+        try:
+            judge_api_key = args.judge_api_key or os.getenv(args.judge_api_key_env)
+            scorecard_metrics = (
+                _load_json_argument(args.scorecard_metrics, label="scorecard_metrics")
+                if args.scorecard_metrics
+                else None
+            )
+            scorecard_thresholds = (
+                _load_json_argument(args.scorecard_thresholds, label="scorecard_thresholds")
+                if args.scorecard_thresholds
+                else None
+            )
+            result = run_phase2_workflow(
+                store_uri=args.store,
+                session=args.session,
+                run_id=args.run_id,
+                selection_scope=args.selection_scope,
+                slice_id=args.slice_id,
+                slice_owner=args.slice_owner,
+                slice_default_use=args.slice_default_use,
+                slice_risk_level=args.slice_risk_level,
+                prepare_producer=args.prepare_producer,
+                prepare_version=args.prepare_version,
+                force_prepare=args.force_prepare,
+                judge_provider=args.judge_provider,
+                judge_model=args.judge_model,
+                judge_api_base=args.judge_api_base,
+                judge_api_key=judge_api_key,
+                judge_instructions=args.judge_instructions,
+                judge_producer=args.judge_producer,
+                judge_version=args.judge_version,
+                force_judge=args.force_judge,
+                builders=args.builders,
+                output_dir=args.output_dir,
+                cohort_name=args.cohort_name,
+                holdout_fraction=args.holdout_fraction,
+                max_members_per_task_instance=args.max_members_per_task_instance,
+                max_members_per_template=args.max_members_per_template,
+                min_quality_confidence=args.min_quality_confidence,
+                min_verifier_score=args.min_verifier_score,
+                create_eval_suite=args.create_eval_suite,
+                suite_kind=args.suite_kind,
+                eval_cohort_name=args.eval_cohort_name,
+                eval_suite_name=args.eval_suite_name,
+                scorecard_metrics=scorecard_metrics,
+                scorecard_thresholds=scorecard_thresholds,
+                candidate_model=args.candidate_model,
+                baseline_model=args.baseline_model,
+                promotion_stage=args.promotion_stage,
+                coverage_policy_version=args.coverage_policy_version,
+                promotion_summary=args.promotion_summary,
+                feedback_source=args.feedback_source,
+                dry_run=args.dry_run,
+            )
+            payload = result.to_dict()
+            _print_output(payload if args.json else _render_phase2_run(payload))
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         return 0
@@ -1484,6 +2112,94 @@ def _render_candidate_pool(slice_record, candidates: list) -> str:
     return "\n".join(lines)
 
 
+def _render_workflow_row(row) -> str:
+    lines = [
+        f"Session: {row.session_id}",
+        f"Run: {row.run_id}",
+        f"Evidence: {row.evidence_level}",
+        f"Stage: {row.stage_label} ({row.stage})",
+        f"Trajectory: {row.trajectory_status}",
+        f"Review: {row.review_status}",
+        f"Next action: {row.next_action}",
+        f"Ready builders: {', '.join(row.ready_builders) if row.ready_builders else '<none>'}",
+    ]
+    if row.blockers:
+        lines.append("Blockers:")
+        lines.extend(f"- {blocker}" for blocker in row.blockers)
+    if row.review_reasons:
+        lines.append("Review reasons:")
+        lines.extend(f"- {reason}" for reason in row.review_reasons)
+    return "\n".join(lines)
+
+
+def _render_judge_plan(payload: dict) -> str:
+    artifact = payload["artifact"]
+    lines = [
+        f"Provider: {payload['provider']}",
+        f"Model: {payload['model'] or '<none>'}",
+        f"Session: {payload['session_id']}",
+        f"Run: {payload['run_id']}",
+        f"Persisted: {payload['persisted']}",
+        f"Skipped duplicates: {payload['skipped_duplicates']}",
+        f"Artifact id: {payload['persisted_artifact_id'] or artifact['artifact_id']}",
+        f"Task: {artifact['payload']['task_family']}/{artifact['payload']['task_type']}",
+        f"Quality: {artifact['payload']['quality_confidence']}",
+        f"Verifier: {artifact['payload']['verifier_score']}",
+    ]
+    if payload["warnings"]:
+        lines.append("Warnings:")
+        lines.extend(f"- {warning}" for warning in payload["warnings"])
+    if payload["review_reasons"]:
+        lines.append("Review reasons:")
+        lines.extend(f"- {reason}" for reason in payload["review_reasons"])
+    feedback_updates = payload.get("feedback_updates") or []
+    if feedback_updates:
+        lines.append(f"Feedback updated: {len(feedback_updates)}")
+    return "\n".join(lines)
+
+
+def _render_feedback_list(items: list) -> str:
+    if not items:
+        return "No feedback queue items found."
+    lines = [f"Feedback items: {len(items)}", ""]
+    for item in items:
+        lines.append(
+            f"{item.feedback_id} slice={item.slice_id} source={item.source} "
+            f"status={item.status} target={item.target_ref} reason={item.reason}"
+        )
+    return "\n".join(lines)
+
+
+def _render_feedback_sync(payload: dict) -> str:
+    plan = payload["plan"]
+    lines = [
+        f"Slice: {plan['slice']['slice_id']}",
+        f"Purpose: {plan['purpose']}",
+        f"Candidates: {plan['candidate_count']}",
+        f"Eligible: {plan['eligible_count']}",
+        f"Review count: {plan['review_count']}",
+    ]
+    if "created_count" in payload:
+        lines.append(f"Created feedback: {payload['created_count']}")
+        lines.append(f"Skipped duplicates: {payload['skipped_duplicates']}")
+    if plan["review_queue"]:
+        lines.append("Preview:")
+        for item in plan["review_queue"][:5]:
+            lines.append(
+                f"- {item['run_id']} reasons={', '.join(item['reasons'])}"
+            )
+    return "\n".join(lines)
+
+
+def _render_feedback_resolution(payload: dict) -> str:
+    lines = [f"Updated feedback items: {payload['updated_count']}"]
+    for item in payload["items"]:
+        lines.append(
+            f"- {item['feedback_id']} status={item['status']} target={item['target_ref']}"
+        )
+    return "\n".join(lines)
+
+
 def _render_cohort_freeze_result(result) -> str:
     manifest = result.cohort.manifest
     lines = [
@@ -1618,6 +2334,84 @@ def _render_pipeline_run(payload: dict) -> str:
             f"Exported count: {payload['export']['exported_count']}",
         ]
     )
+    return "\n".join(lines)
+
+
+def _render_phase2_run(payload: dict) -> str:
+    prepare = payload["prepare"]
+    lines = [
+        f"Session: {payload['session_id']}",
+        f"Run: {payload['run_id']}",
+        f"Selection scope: {payload['selection_scope']}",
+        f"Dry run: {payload['dry_run']}",
+        f"Prepare status: {prepare['artifact']['payload'].get('prepare_status', '<unknown>')}",
+        f"Workflow: {payload['workflow_before']['stage']} -> {payload['workflow_after']['stage']}",
+        f"Next action: {payload['next_action']}",
+    ]
+    if prepare["blocker_reasons"]:
+        lines.append("Preparation blockers:")
+        lines.extend(f"- {reason}" for reason in prepare["blocker_reasons"])
+    if prepare["review_reasons"]:
+        lines.append("Preparation review reasons:")
+        lines.extend(f"- {reason}" for reason in prepare["review_reasons"])
+    judge = payload.get("judge")
+    if judge is not None:
+        lines.append(
+            "Judge: "
+            f"{judge['provider']} persisted={judge['persisted']} "
+            f"task={judge['artifact']['payload']['task_family']}/{judge['artifact']['payload']['task_type']}"
+        )
+    if payload.get("slice") is not None:
+        lines.append(
+            f"Slice: {payload['slice']['record']['slice_id']} "
+            f"created={payload['slice']['created']}"
+        )
+    feedback_sync = payload.get("feedback_sync")
+    if feedback_sync is not None:
+        lines.append(
+            "Review queue: "
+            f"created={feedback_sync.get('created_count', 0)} "
+            f"review_count={feedback_sync['plan']['review_count']}"
+        )
+    if payload["training_cohort"] is not None:
+        lines.append(
+            f"Training cohort: {payload['training_cohort']['cohort_id']} "
+            f"members={payload['training_member_count']}"
+        )
+    exports = payload.get("exports") or []
+    if exports:
+        lines.append("Exports:")
+        for item in exports:
+            lines.append(
+                f"- {item['builder']} ready={item['planned']['ready']} "
+                f"exported={item['exported']} records={item['record_count']} "
+                f"path={item['output_path']}"
+            )
+    if payload["evaluation_cohort"] is not None:
+        lines.append(
+            f"Evaluation cohort: {payload['evaluation_cohort']['cohort_id']} "
+            f"members={payload['evaluation_member_count']}"
+        )
+    if payload["eval_suite"] is not None:
+        lines.append(
+            f"Eval suite: {payload['eval_suite']['eval_suite_id']} "
+            f"kind={payload['eval_suite']['suite_kind']}"
+        )
+    if payload["scorecard"] is not None:
+        lines.append(
+            f"Scorecard: {payload['scorecard']['scorecard_id']} "
+            f"verdict={payload['scorecard']['verdict']}"
+        )
+    if payload["promotion"] is not None:
+        lines.append(
+            f"Promotion: {payload['promotion']['promotion_decision_id']} "
+            f"decision={payload['promotion']['decision']}"
+        )
+    if payload["warnings"]:
+        lines.append("Warnings:")
+        lines.extend(f"- {warning}" for warning in payload["warnings"])
+    if payload["stopped_reason"]:
+        lines.append(f"Stopped at: {payload['stopped_reason']}")
     return "\n".join(lines)
 
 

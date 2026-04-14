@@ -2,7 +2,16 @@
 
 import { useDeferredValue, useEffect, useState } from "react";
 import type { SessionSummary } from "@/lib/types";
-import { evidenceTone, outcomeLabel, outcomeTone } from "@/lib/presenters";
+import {
+  evidenceDetail,
+  evidenceLabel,
+  evidenceTone,
+  outcomeLabel,
+  outcomeTone,
+  reviewStatusLabel,
+  reviewStatusTone,
+  workflowStageTone
+} from "@/lib/presenters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -11,7 +20,7 @@ type SessionInboxWorkspaceProps = {
   sessions: SessionSummary[];
 };
 
-type SessionView = "all" | "attention" | "e2";
+type SessionView = "all" | "attention" | "ready";
 
 export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) {
   const [query, setQuery] = useState("");
@@ -26,7 +35,7 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
         ? true
         : view === "attention"
         ? session.anomalies.length > 0 || session.runs.some((run) => run.outcome !== "succeeded")
-        : session.evidenceLevel === "E2";
+        : session.runs.some((run) => run.stage === "dataset" || run.stage === "evaluate");
 
     if (!matchesView) {
       return false;
@@ -71,8 +80,8 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
     <div className="grid gap-6 xl:grid-cols-[0.88fr_1.12fr]">
       <Card
         action={<span className="text-xs text-[color:var(--text-soft)]">共 {filteredSessions.length} 条</span>}
-        eyebrow="实时分诊"
-        title="会话选择器"
+        eyebrow="最近运行"
+        title="按会话查看真实数据"
         strong
       >
         <div className="space-y-4">
@@ -80,15 +89,15 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
             <input
               className="w-full bg-transparent text-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--text-soft)]"
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="按 session id / run id / user / anomaly 搜索"
+              placeholder="按会话、运行、用户或异常关键词搜索"
               value={query}
             />
           </div>
           <div className="flex flex-wrap gap-2">
             {[
               ["all", "全部"],
-              ["attention", "待关注"],
-              ["e2", "仅 E2"]
+              ["attention", "优先处理"],
+              ["ready", "可导出 / 可评估"]
             ].map(([id, label]) => (
               <button
                 className={
@@ -128,8 +137,11 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                       <div className="mt-1 text-sm text-[color:var(--text-muted)]">
                         {session.requests} 请求 · {session.branches} 分支 · {session.userIds.join(", ")}
                       </div>
+                      <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                        下一步：{session.nextAction ?? session.runs[0]?.nextAction ?? "打开会话确认"}
+                      </div>
                     </div>
-                    <Badge tone={evidenceTone(session.evidenceLevel)}>{session.evidenceLevel}</Badge>
+                    <Badge tone={evidenceTone(session.evidenceLevel)}>{evidenceLabel(session.evidenceLevel)}</Badge>
                   </div>
                   {session.anomalies.length ? (
                     <div className="mt-3 text-xs text-amber-700">{session.anomalies[0]}</div>
@@ -146,8 +158,9 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
           <Card eyebrow="当前会话" title={selectedSession.id} strong>
             <div className="grid gap-3 md:grid-cols-4">
               <div className="tech-highlight rounded-2xl p-4">
-                <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">证据等级</div>
-                <div className="mt-3 text-2xl font-semibold">{selectedSession.evidenceLevel}</div>
+                <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">当前阶段</div>
+                <div className="mt-3 text-2xl font-semibold">{evidenceLabel(selectedSession.evidenceLevel)}</div>
+                <div className="mt-2 text-xs text-[color:var(--text-muted)]">{evidenceDetail(selectedSession.evidenceLevel)}</div>
               </div>
               <div className="panel-soft rounded-2xl p-4">
                 <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">运行数</div>
@@ -166,6 +179,7 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
               {selectedSession.userIds.map((userId) => (
                 <Badge key={userId} tone="info">{userId}</Badge>
               ))}
+              <Badge tone="accent">{selectedSession.nextAction ?? "打开运行查看下一步"}</Badge>
             </div>
             {selectedSession.anomalies.length ? (
               <div className="mt-4 space-y-2">
@@ -178,7 +192,7 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
             ) : null}
           </Card>
 
-          <Card eyebrow="运行工作区" title="Run 选择与详情">
+          <Card eyebrow="运行工作区" title="这次会话下一步怎么走">
             <div className="grid gap-4 xl:grid-cols-[0.88fr_1.12fr]">
               <div className="space-y-3">
                 {selectedSession.runs.map((run) => {
@@ -200,10 +214,18 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                           <div className="mt-2 text-sm text-[color:var(--text-muted)]">
                             {run.requestCount} req · {run.branchCount} 分支 · {run.avgLatency}
                           </div>
+                          <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                            {run.nextAction ?? "进入回放查看下一步"}
+                          </div>
                         </div>
                         <div className="flex flex-col items-end gap-2">
-                          <Badge tone={evidenceTone(run.evidenceLevel)}>{run.evidenceLevel}</Badge>
+                          <Badge tone={workflowStageTone(run.stage)}>{run.stageLabel ?? evidenceLabel(run.evidenceLevel)}</Badge>
                           <Badge tone={outcomeTone(run.outcome)}>{outcomeLabel(run.outcome)}</Badge>
+                          {run.reviewStatus ? (
+                            <Badge tone={reviewStatusTone(run.reviewStatus)}>
+                              {reviewStatusLabel(run.reviewStatus)}
+                            </Badge>
+                          ) : null}
                         </div>
                       </div>
                     </button>
@@ -217,26 +239,46 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">当前运行</div>
                       <div className="mt-2 text-2xl font-semibold">{selectedRun.id}</div>
+                      <p className="mt-2 text-sm leading-6 text-[color:var(--text-muted)]">
+                        {selectedRun.stageDetail ?? evidenceDetail(selectedRun.evidenceLevel)}
+                      </p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Badge tone={evidenceTone(selectedRun.evidenceLevel)}>{selectedRun.evidenceLevel}</Badge>
+                      <Badge tone={workflowStageTone(selectedRun.stage)}>{selectedRun.stageLabel ?? evidenceLabel(selectedRun.evidenceLevel)}</Badge>
                       <Badge tone={outcomeTone(selectedRun.outcome)}>{outcomeLabel(selectedRun.outcome)}</Badge>
+                      {selectedRun.reviewStatus ? (
+                        <Badge tone={reviewStatusTone(selectedRun.reviewStatus)}>
+                          {reviewStatusLabel(selectedRun.reviewStatus)}
+                        </Badge>
+                      ) : null}
                     </div>
                   </div>
                   <div className="mt-5 grid gap-3 md:grid-cols-2">
                     <div className="rounded-2xl bg-white/70 p-4">
                       <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">请求闭环</div>
                       <div className="mt-3 text-sm text-[color:var(--text-muted)]">
-                        成功 {selectedRun.successCount} · 失败 {selectedRun.failureCount} · Open {selectedRun.openCount}
+                        成功 {selectedRun.successCount} · 失败 {selectedRun.failureCount} · 未闭合 {selectedRun.openCount}
                       </div>
                     </div>
                     <div className="rounded-2xl bg-white/70 p-4">
-                      <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">结构保真</div>
+                      <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">数据准备状态</div>
                       <div className="mt-3 text-sm text-[color:var(--text-muted)]">
-                        Declared 比例 {Math.round(selectedRun.declaredRatio * 100)}% · Artifacts {selectedRun.artifactCount}
+                        可导出数据类型 {selectedRun.readyBuilders?.length ?? 0} 个 · 判断记录 {selectedRun.artifactCount}
                       </div>
                     </div>
                   </div>
+                  <div className="mt-4 rounded-2xl bg-white/70 px-4 py-3 text-sm text-[color:var(--text-muted)]">
+                    下一步：{selectedRun.nextAction ?? "进入回放后确认下一步动作"}
+                  </div>
+                  {selectedRun.blockers?.length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {selectedRun.blockers.slice(0, 3).map((blocker) => (
+                        <Badge key={blocker} tone="warning">
+                          {blocker}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mt-5 flex flex-wrap gap-3">
                     <Button href={`/sessions/${selectedSession.id}/runs/${selectedRun.id}/replay`} variant="primary">
                       进入回放

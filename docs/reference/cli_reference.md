@@ -24,6 +24,14 @@ Captures:
 - streaming chunks
 - request ids and timing fields
 
+Useful flags:
+
+- `--model-upstream`
+- `--tool-upstream`
+- `--auth-token`
+- `--upstream-api-key`
+- `--store`
+
 ## `clawgraph replay`
 
 Inspect a replay for one session or one run.
@@ -104,6 +112,45 @@ Useful flags:
 
 Inspect one branch or list branch summaries.
 
+## `clawgraph inspect dashboard`
+
+Inspect one dashboard-oriented snapshot that aggregates:
+
+- session inbox state
+- run-level evidence and learning readiness
+- workflow-stage status, blockers, and next actions
+- slice / cohort / dataset / eval governance state
+
+Useful flags:
+
+- `--builder`
+- `--session-limit`
+- `--run-limit`
+- `--watch`
+- `--interval-seconds`
+- `--iterations`
+- `--json`
+
+## `clawgraph inspect workflow`
+
+Inspect one run-scoped phase-2 workflow row.
+
+This command uses the same stage logic as the dashboard and returns:
+
+- `stage / stage_label`
+- `trajectory_status`
+- `review_status`
+- `blockers`
+- `review_reasons`
+- `next_action`
+
+Useful flags:
+
+- `--session`
+- `--run-id`
+- `--builder`
+- `--json`
+
 ## `clawgraph semantic append`
 
 Append a semantic runtime event.
@@ -163,6 +210,53 @@ Filters:
 - `--latest-only`
 - `--run-id`
 
+## `clawgraph judge annotate`
+
+Plan or append one run-level E1 annotation produced by a generic judge.
+
+Supported providers:
+
+- `heuristic`
+- `openai-compatible`
+
+What it does:
+
+- derives stable E1 defaults from the captured run
+- optionally calls an OpenAI-compatible LLM judge
+- appends one versioned annotation artifact
+- keeps `review_reasons` and `supersedes_artifact_id` for later override
+
+Useful flags:
+
+- `--provider`
+- `--model`
+- `--api-base`
+- `--api-key` or `--api-key-env`
+- `--instructions`
+- `--dry-run`
+- `--json`
+
+## `clawgraph judge override`
+
+Append one manual override annotation for a run.
+
+What it does:
+
+- loads the current run-level annotation when available
+- appends a superseding annotation artifact with producer like `human-review`
+- can clear `review_reasons` and optionally resolve queued feedback items
+
+Useful flags:
+
+- `--payload`
+- `--review-note`
+- `--preserve-review-reasons`
+- `--feedback-status reviewed|resolved`
+- `--slice-id`
+- `--reviewer`
+- `--dry-run`
+- `--json`
+
 ## `clawgraph readiness`
 
 Inspect whether the selected run is ready for:
@@ -179,6 +273,54 @@ Useful flags:
 
 If `--run-id` is omitted, ClawGraph evaluates the latest run inside the
 selected session.
+
+## `clawgraph feedback enqueue`
+
+Append one feedback queue item by hand.
+
+`--payload` accepts either inline JSON or `@path/to/file.json`.
+
+## `clawgraph feedback list`
+
+List feedback queue items, optionally filtered by `--slice-id` and `--status`.
+
+## `clawgraph feedback sync`
+
+Preview or append feedback queue items derived from one slice review queue.
+
+What it does:
+
+- resolves the slice candidate pool
+- applies the same review thresholds used by curation
+- appends deduplicated feedback items for flagged runs
+
+Useful flags:
+
+- `--slice-id`
+- `--session`
+- `--run-id`
+- `--min-quality-confidence`
+- `--min-verifier-score`
+- `--dry-run`
+- `--json`
+
+## `clawgraph feedback resolve`
+
+Mark feedback queue items as `reviewed` or `resolved`.
+
+Selectors:
+
+- `--feedback-id`
+- `--target-ref`
+- `--slice-id`
+
+Useful flags:
+
+- `--from-status`
+- `--status`
+- `--note`
+- `--reviewer`
+- `--json`
 
 ## `clawgraph pipeline run`
 

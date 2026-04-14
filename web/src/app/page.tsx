@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { getDashboardBundle } from "@/lib/data-source";
 import { guidedFlows } from "@/lib/navigation";
-import { formatCompact } from "@/lib/utils";
 import { FlowSteps } from "@/components/dashboard/flow-steps";
 import { MetricCard } from "@/components/dashboard/metric-card";
+import { WorkflowBoard } from "@/components/dashboard/workflow-board";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -11,7 +11,15 @@ import { PageHeader } from "@/components/ui/page-header";
 
 export default async function OverviewPage() {
   const {
-    bundle: { healthMatrix, opportunities, overviewMetrics, risks },
+    bundle: {
+      healthMatrix,
+      ingestSummary,
+      opportunities,
+      overviewMetrics,
+      risks,
+      workflowLanes,
+      workflowRuns
+    },
     meta
   } = await getDashboardBundle();
 
@@ -19,22 +27,38 @@ export default async function OverviewPage() {
     <div className="space-y-6">
       <PageHeader
         title="总览"
-        description="围绕证据健康度、训练资产产出、切片替代机会和回流风险的学习数据驾驶舱。"
+        description="把真实 agent 流量接进来以后，按“采集、数据准备、人工复核、导出与评估”的顺序推进完整数据闭环。"
         primaryAction={<Button href="/flows/connect-runtime" variant="primary">开始引导流程</Button>}
-        secondaryAction={<Button href="/datasets" variant="secondary">查看导出摘要</Button>}
+        secondaryAction={<Button href="/sessions" variant="secondary">打开最近运行</Button>}
       />
 
-      <Card eyebrow="数据源" title="当前读取模式">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="text-sm text-[color:var(--text-muted)]">{meta.statusText}</div>
-            <div className="mt-2 mono text-xs text-[color:var(--text-soft)]">
-              mode={meta.configuredMode} · resolved={meta.resolvedMode}
+      <Card eyebrow="数据源" title="当前联调状态" strong>
+        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="text-sm text-[color:var(--text-muted)]">{meta.statusText}</div>
+              <div className="mt-2 mono text-xs text-[color:var(--text-soft)]">
+                mode={meta.configuredMode} · resolved={meta.resolvedMode}
+              </div>
+            </div>
+            <Badge tone={meta.status === "prod" ? "success" : meta.status === "prod-fallback" ? "warning" : "info"}>
+              {meta.status}
+            </Badge>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="panel-soft rounded-[1.1rem] p-4">
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">最近活动</div>
+              <div className="mt-3 text-lg font-semibold">{ingestSummary?.latestActivity ?? "-"}</div>
+            </div>
+            <div className="panel-soft rounded-[1.1rem] p-4">
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">最新会话</div>
+              <div className="mt-3 text-lg font-semibold">{ingestSummary?.latestSessionId ?? "-"}</div>
+            </div>
+            <div className="panel-soft rounded-[1.1rem] p-4">
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">最近请求</div>
+              <div className="mt-3 text-lg font-semibold">{ingestSummary?.requestCount ?? 0}</div>
             </div>
           </div>
-          <Badge tone={meta.status === "prod" ? "success" : meta.status === "prod-fallback" ? "warning" : "info"}>
-            {meta.status}
-          </Badge>
         </div>
       </Card>
 
@@ -43,6 +67,8 @@ export default async function OverviewPage() {
           <MetricCard key={metric.label} metric={metric} />
         ))}
       </div>
+
+      <WorkflowBoard lanes={workflowLanes ?? []} runs={workflowRuns ?? []} />
 
       <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <Card eyebrow="健康矩阵" title="系统与治理健康度" strong>
@@ -96,23 +122,27 @@ export default async function OverviewPage() {
           </div>
         </Card>
 
-        <Card eyebrow="业务视角" title="价值叙事">
+        <Card eyebrow="接入质量" title="当前联调进度">
           <div className="grid gap-3 md:grid-cols-2">
             <div className="panel-soft rounded-[1.1rem] p-4">
-              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">首次回放耗时</div>
-              <div className="mt-3 text-2xl font-semibold">18 分钟</div>
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">请求归属清晰度</div>
+              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.identityCoverage ?? "-"}</div>
+              <div className="mt-2 text-xs text-[color:var(--text-muted)]">能否稳定归到同一 session / run。</div>
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
-              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">会话转数据集产出率</div>
-              <div className="mt-3 text-2xl font-semibold">62%</div>
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">任务识别清晰度</div>
+              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.semanticCoverage ?? "-"}</div>
+              <div className="mt-2 text-xs text-[color:var(--text-muted)]">能否看清任务类型、关键节点和结果。</div>
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
-              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">可替代切片数</div>
-              <div className="mt-3 text-2xl font-semibold">2 / 7</div>
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">待补基础标签</div>
+              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.needsAnnotationRuns ?? 0}</div>
+              <div className="mt-2 text-xs text-[color:var(--text-muted)]">这些运行还不能直接进入数据池。</div>
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
-              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">预估月度降本空间</div>
-              <div className="mt-3 text-2xl font-semibold">{formatCompact(240000)}/月</div>
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">待人工确认</div>
+              <div className="mt-3 text-2xl font-semibold">{ingestSummary?.needsReviewRuns ?? 0}</div>
+              <div className="mt-2 text-xs text-[color:var(--text-muted)]">低置信或存在分歧的运行会排到这里。</div>
             </div>
           </div>
         </Card>

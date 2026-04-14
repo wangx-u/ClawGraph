@@ -12,7 +12,18 @@ clawgraph proxy --model-upstream https://your-model-endpoint \
   --store sqlite:///clawgraph.db
 ```
 
+If you want the proxy to inject the real upstream bearer token so agents only
+need a local placeholder key, set `CLAWGRAPH_UPSTREAM_API_KEY` or pass
+`--upstream-api-key`.
+
 Then point model and tool traffic at the proxy and send one real request.
+
+This also applies to benchmark agents.
+
+If a runtime already speaks an OpenAI-compatible HTTP surface, the default path
+should stay generic: change only its `base_url` or `api_base` to point at
+`clawgraph proxy`, then keep capture, inspect, artifact attachment, and export
+inside ClawGraph.
 
 Inspect the result with:
 
@@ -34,6 +45,7 @@ What it gives you:
 - dataset export capability
 - streaming chunk capture for chat-completions
 - sticky session and run identity for cookie-backed browser clients
+- optional proxy-side upstream bearer injection for OpenAI-compatible endpoints
 
 What it does not guarantee:
 

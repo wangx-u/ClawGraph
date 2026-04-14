@@ -238,3 +238,8 @@ class ClawGraphQueryService:
         """List feedback queue items."""
 
         return self.store.list_feedback_queue(slice_id=slice_id, status=status)
+
+    def get_feedback_queue_item(self, feedback_id: str) -> FeedbackQueueRecord | None:
+        """Return one feedback queue item by id."""
+
+        return self.store.get_feedback_queue_item(feedback_id)

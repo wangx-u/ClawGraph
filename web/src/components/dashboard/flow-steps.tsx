@@ -9,7 +9,7 @@ export function FlowSteps({ flow }: { flow: GuidedFlow }) {
   const activeStep = flow.steps[activeIndex] ?? flow.steps[0];
 
   return (
-    <Card eyebrow="引导流" title={flow.title} strong>
+    <Card eyebrow="流程向导" title={flow.title} strong>
       <p className="text-sm text-[color:var(--text-muted)]">{flow.description}</p>
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-sky-100">
         <div
@@ -42,7 +42,7 @@ export function FlowSteps({ flow }: { flow: GuidedFlow }) {
         ))}
       </div>
       <div className="tech-highlight mt-5 rounded-[1.15rem] p-4">
-        <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">当前步骤</div>
+        <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">现在该做什么</div>
         <div className="mt-2 text-base font-medium">{activeStep.title}</div>
         <p className="mt-2 text-sm leading-6 text-[color:var(--text-muted)]">{activeStep.detail}</p>
       </div>

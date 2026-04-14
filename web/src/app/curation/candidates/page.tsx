@@ -9,32 +9,34 @@ import { Badge } from "@/components/ui/badge";
 
 export default async function CandidatePoolPage() {
   const {
-    bundle: { candidates }
+    bundle: { candidates, cohorts, slices }
   } = await getDashboardBundle();
   const eligibleCount = candidates.filter((item) => item.status === "eligible").length;
   const reviewCount = candidates.filter((item) => item.status === "review").length;
   const holdoutCount = candidates.filter((item) => item.status === "holdout").length;
+  const cohortHref = cohorts[0] ? `/curation/cohorts/${cohorts[0].id}` : "/datasets";
+  const primarySlice = slices[0];
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="策展 / 候选池"
-        description="围绕单个切片复查候选运行、应用质量门槛，并决定哪些样本应该进入下一版冻结 cohort。"
-        primaryAction={<Button href="/curation/cohorts/cohort_train_aiops_v1" variant="primary">冻结 Cohort</Button>}
+        title="数据筛选"
+        description="围绕切片复查候选运行、处理低置信样本，并决定哪些数据可以进入下一版冻结批次。"
+        primaryAction={<Button href={cohortHref} variant="primary">查看冻结结果</Button>}
         secondaryAction={<Button href="/datasets" variant="secondary">打开导出流</Button>}
       />
       <FilterBar
         filters={[
-          "切片：slice.aiops.incident_triage",
-          "质量 >= 0.60",
-          "Verifier >= 0.60",
+          `当前切片：${primarySlice?.id ?? "全部"}`,
+          "质量阈值：动态",
+          "Verifier 阈值：动态",
           "来源：全部",
           "时间：最近 30 天"
         ]}
       />
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <Card eyebrow="候选统计" title="候选池概览" strong>
+        <Card eyebrow="候选统计" title="候选样本概览" strong>
           <div className="grid gap-3 md:grid-cols-4">
             <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">总量</div><div className="mt-3 text-2xl font-semibold">{candidates.length}</div></div>
             <div className="tech-highlight rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">可入池</div><div className="mt-3 text-2xl font-semibold">{eligibleCount}</div></div>
@@ -42,15 +44,13 @@ export default async function CandidatePoolPage() {
             <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">保留集</div><div className="mt-3 text-2xl font-semibold">{holdoutCount}</div></div>
           </div>
         </Card>
-        <Card eyebrow="复核队列" title="被阻塞的主要原因">
+        <Card eyebrow="复核队列" title="当前最常见的阻塞原因">
           <div className="space-y-3">
-            {[
-              "日志证据不完整",
-              "rollback 分支缺少人工确认",
-              "同类事故 cluster 已超配额",
-              "root cause 标签冲突",
-              "缺少 deploy_sha / alert_fingerprint 字段"
-            ].map((reason) => (
+            {(candidates
+              .filter((candidate) => candidate.status !== "eligible")
+              .slice(0, 5)
+              .map((candidate) => `${candidate.runId} · ${genericStatusLabel(candidate.status)}`) || []
+            ).map((reason) => (
               <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={reason}>
                 {reason}
               </div>
@@ -59,7 +59,7 @@ export default async function CandidatePoolPage() {
         </Card>
       </div>
 
-      <Card eyebrow="候选池" title="候选样本表">
+      <Card eyebrow="候选列表" title="候选样本表">
         <DataTable
           headers={["Run", "Task Instance", "Template Hash", "质量", "Verifier", "来源", "Cluster", "状态"]}
           rows={candidates.map((candidate) => [

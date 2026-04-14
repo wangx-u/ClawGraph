@@ -1,0 +1,7 @@
+model:
+  model_name: "gpt-4o-mini"
+  cost_tracking: "ignore_errors"
+  model_kwargs:
+    custom_llm_provider: "openai"
+    api_base: "http://127.0.0.1:8080"
+    drop_params: true

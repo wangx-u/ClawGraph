@@ -1,5 +1,12 @@
 import { getDashboardBundle } from "@/lib/data-source";
-import { genericStatusLabel, genericStatusTone, outcomeLabel, outcomeTone } from "@/lib/presenters";
+import {
+  evidenceLabel,
+  genericStatusLabel,
+  genericStatusTone,
+  outcomeLabel,
+  outcomeTone,
+  workflowStageTone
+} from "@/lib/presenters";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
@@ -33,14 +40,16 @@ export default async function ReplayPage({
   }
 
   const artifactCount = run.artifactCount ?? replay.requests.reduce((sum, item) => sum + item.artifactCount, 0);
+  const builderBadges = run.readyBuilders ?? [];
+  const runBlockers = run.readinessBlockers ?? run.blockers ?? [];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title={`回放 ${replay.runId}`}
-        description="按执行顺序还原一个真实运行的请求、分支和语义事件，用于定位根因并判断它是否具备导出就绪度。"
-        primaryAction={<Button href="/flows/investigate-failure" variant="primary">排查失败</Button>}
-        secondaryAction={<Button href="/supervision" variant="secondary">补监督信号</Button>}
+        description="按执行顺序还原一个真实运行的请求、分支和语义事件，用于判断它现在卡在哪一步，以及下一步要补什么。"
+        primaryAction={<Button href="/flows/investigate-failure" variant="primary">继续排查</Button>}
+        secondaryAction={<Button href="/supervision" variant="secondary">去补标签</Button>}
       />
 
       <Card eyebrow="回放摘要" title={`${replay.sessionId} / ${replay.runId}`} strong>
@@ -53,6 +62,7 @@ export default async function ReplayPage({
         <div className="mt-4 flex flex-wrap gap-2">
           <Badge tone={outcomeTone(run.outcome)}>{outcomeLabel(run.outcome)}</Badge>
           <Badge tone="info">{run.avgLatency}</Badge>
+          <Badge tone={workflowStageTone(run.stage)}>{run.stageLabel ?? evidenceLabel(run.evidenceLevel)}</Badge>
           <Badge tone="accent">会话 {replay.sessionId}</Badge>
         </div>
       </Card>
@@ -104,19 +114,28 @@ export default async function ReplayPage({
         </Card>
       </div>
 
-      <Card eyebrow="上下文面板" title="回放配套上下文">
-        <Tabs active="导出就绪度" items={["Artifacts 叠层", "Payload 预览", "语义事件", "导出就绪度"]} />
+      <Card eyebrow="治理面板" title="这次运行接下来怎么处理">
+        <Tabs active="下一步动作" items={["当前阶段", "可用 Builder", "阻塞项", "下一步动作"]} />
         <div className="mt-5 grid gap-3 md:grid-cols-3">
-          {[
-            "sft：就绪，成功分支里 metrics / logs / rollout 12 条 request 已可导出。",
-            "preference：已抽取 rollback vs continue-observe 的 1 组偏好对，但仍缺更多 approval 样本。",
-            "binary_rl：就绪，整次 incident run 已具备最终恢复结果与 verifier 记录。"
-          ].map((item) => (
-            <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={item}>
-              {item}
-            </div>
-          ))}
+          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+            当前阶段：{run.stageLabel ?? evidenceLabel(run.evidenceLevel)}。{run.stageDetail ?? "先确认这次运行是否已经具备稳定标签。"}
+          </div>
+          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+            可用 Builder：{builderBadges.length ? builderBadges.join("、") : "暂时没有，需要继续补监督。"}
+          </div>
+          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+            下一步：{run.nextAction ?? "回到补标签或样本治理页面继续处理。"}
+          </div>
         </div>
+        {runBlockers.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {runBlockers.slice(0, 4).map((item) => (
+              <Badge key={item} tone="warning">
+                {item}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
       </Card>
     </div>
   );

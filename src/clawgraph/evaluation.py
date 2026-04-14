@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
+from clawgraph.curation import SliceReviewPlan, preview_slice_review_queue
 from clawgraph.protocol.factories import (
     new_eval_suite_record,
     new_feedback_queue_record,
@@ -17,6 +19,23 @@ from clawgraph.protocol.models import (
     ScorecardRecord,
 )
 from clawgraph.store import SQLiteFactStore
+
+
+@dataclass(slots=True)
+class FeedbackSyncResult:
+    """Persisted feedback items created from one slice review preview."""
+
+    plan: SliceReviewPlan
+    created: list[FeedbackQueueRecord]
+    skipped_duplicates: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "plan": self.plan.to_dict(),
+            "created_count": len(self.created),
+            "skipped_duplicates": self.skipped_duplicates,
+            "created": [item.to_dict() for item in self.created],
+        }
 
 
 def create_eval_suite_from_cohort(
@@ -208,6 +227,114 @@ def enqueue_feedback(
     )
     store_instance.append_feedback_queue_item(feedback)
     return feedback
+
+
+def sync_feedback_queue_from_slice_review(
+    *,
+    store_uri: str | None = None,
+    store: SQLiteFactStore | None = None,
+    slice_id: str,
+    source: str = "auto_review",
+    session: str | None = None,
+    run_id: str | None = None,
+    task_instance_key: str | None = None,
+    task_template_hash: str | None = None,
+    min_quality_confidence: float | None = None,
+    min_verifier_score: float | None = None,
+    source_channel: str | None = None,
+    limit: int | None = None,
+    purpose: str | None = None,
+) -> FeedbackSyncResult:
+    """Append deduplicated feedback queue items from the slice review preview."""
+
+    store_instance = store or SQLiteFactStore(str(store_uri))
+    plan = preview_slice_review_queue(
+        store=store_instance,
+        slice_id=slice_id,
+        session=session,
+        run_id=run_id,
+        task_instance_key=task_instance_key,
+        task_template_hash=task_template_hash,
+        min_quality_confidence=min_quality_confidence,
+        min_verifier_score=min_verifier_score,
+        source_channel=source_channel,
+        limit=limit,
+        purpose=purpose,
+    )
+    existing = {
+        (
+            item.target_ref,
+            item.reason,
+            item.status,
+        )
+        for item in store_instance.list_feedback_queue(slice_id=slice_id)
+        if item.status != "resolved"
+    }
+    created: list[FeedbackQueueRecord] = []
+    skipped_duplicates = 0
+    for item in plan.review_queue:
+        target_ref = f"run:{item['run_id']}"
+        for reason in item["reasons"]:
+            signature = (target_ref, reason, "queued")
+            if signature in existing:
+                skipped_duplicates += 1
+                continue
+            feedback = new_feedback_queue_record(
+                slice_id=slice_id,
+                source=source,
+                target_ref=target_ref,
+                reason=reason,
+                payload={
+                    "session_id": item["session_id"],
+                    "run_id": item["run_id"],
+                    "task_instance_key": item["task_instance_key"],
+                    "task_template_hash": item["task_template_hash"],
+                    "reasons": list(item["reasons"]),
+                    "quality_threshold": plan.quality_threshold,
+                    "verifier_threshold": plan.verifier_threshold,
+                },
+            )
+            store_instance.append_feedback_queue_item(feedback)
+            created.append(feedback)
+            existing.add(signature)
+    return FeedbackSyncResult(
+        plan=plan,
+        created=created,
+        skipped_duplicates=skipped_duplicates,
+    )
+
+
+def update_feedback_queue_status(
+    *,
+    store_uri: str | None = None,
+    store: SQLiteFactStore | None = None,
+    status: str,
+    feedback_id: str | None = None,
+    slice_id: str | None = None,
+    target_ref: str | None = None,
+    from_status: str | None = None,
+    note: str | None = None,
+    reviewer: str | None = None,
+) -> list[FeedbackQueueRecord]:
+    """Update one or more feedback queue item statuses."""
+
+    store_instance = store or SQLiteFactStore(str(store_uri))
+    metadata_patch = {
+        key: value
+        for key, value in {
+            "resolution_note": note,
+            "reviewer": reviewer,
+        }.items()
+        if isinstance(value, str) and value
+    }
+    return store_instance.update_feedback_queue_status(
+        status=status,
+        feedback_id=feedback_id,
+        slice_id=slice_id,
+        target_ref=target_ref,
+        from_status=from_status,
+        metadata_patch=metadata_patch,
+    )
 
 
 def _resolve_scorecard_verdict(

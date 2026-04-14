@@ -50,6 +50,7 @@ class ProxyConfig:
     store_uri: str
     model_upstream: str | None = None
     tool_upstream: str | None = None
+    upstream_api_key: str | None = None
     upstream_timeout_seconds: float = 30.0
     auth_token: str | None = None
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
@@ -257,6 +258,7 @@ def _forward_headers(
     run_id: str,
     request_id: str,
     user_id: str | None,
+    upstream_api_key: str | None = None,
     thread_id: str | None = None,
     task_id: str | None = None,
 ) -> dict[str, str]:
@@ -275,6 +277,8 @@ def _forward_headers(
                 forwarded[key] = forwarded_cookie
             continue
         forwarded[key] = value
+    if upstream_api_key:
+        forwarded["Authorization"] = f"Bearer {upstream_api_key}"
     forwarded.setdefault("x-clawgraph-session-id", session_id)
     forwarded.setdefault("x-clawgraph-run-id", run_id)
     forwarded.setdefault("x-clawgraph-request-id", request_id)
@@ -363,25 +367,46 @@ def _merge_query_strings(base_query: str, requested_query: str) -> str:
     return requested_query or base_query
 
 
+def _is_semantic_events_path(path: str) -> bool:
+    return path in {"/v1/semantic-events", "/semantic-events"}
+
+
+def _is_model_path(path: str) -> bool:
+    return path.startswith("/v1/") or path in {"/chat/completions", "/responses"}
+
+
+def _is_responses_path(path: str) -> bool:
+    return path in {"/v1/responses", "/responses"}
+
+
 def _rewrite_upstream_path(base_path: str, requested_path: str) -> str | None:
     """Rewrite a requested path while preserving any upstream path prefix."""
 
+    candidate_markers: list[str]
     if requested_path.startswith("/v1/"):
-        marker = "/v1/"
+        candidate_markers = ["/v1/"]
+    elif requested_path == "/chat/completions":
+        candidate_markers = ["/v1/chat/completions", "/chat/completions", "/v1/"]
+    elif requested_path == "/responses":
+        candidate_markers = ["/v1/responses", "/responses", "/v1/"]
     elif requested_path.startswith("/tools"):
-        marker = "/tools"
+        candidate_markers = ["/tools"]
     else:
         return None
 
-    marker_index = base_path.find(marker)
-    if marker_index < 0:
-        return None
-    prefix = base_path[:marker_index]
-    return f"{prefix}{requested_path}"
+    for marker in candidate_markers:
+        marker_index = base_path.find(marker)
+        if marker_index < 0:
+            continue
+        prefix = base_path[:marker_index]
+        if marker.startswith("/v1/") and not requested_path.startswith("/v1/"):
+            return f"{prefix}/v1{requested_path}"
+        return f"{prefix}{requested_path}"
+    return None
 
 
 def _target_upstream(path: str, config: ProxyConfig) -> str | None:
-    if path.startswith("/v1/") and path != "/v1/semantic-events":
+    if _is_model_path(path) and not _is_semantic_events_path(path):
         return config.model_upstream
     if path.startswith("/tools"):
         return config.tool_upstream
@@ -389,7 +414,7 @@ def _target_upstream(path: str, config: ProxyConfig) -> str | None:
 
 
 def _actor_for_path(path: str) -> str:
-    if path.startswith("/v1/") and path != "/v1/semantic-events":
+    if _is_model_path(path) and not _is_semantic_events_path(path):
         return "model"
     if path.startswith("/tools"):
         return "tool"
@@ -604,7 +629,7 @@ def _build_stream_response_json(path: str, state: dict[str, Any]) -> dict[str, A
         fallback = state.get("fallback_text")
         text = fallback if isinstance(fallback, str) else ""
     role = state["role"] if isinstance(state.get("role"), str) and state["role"] else "assistant"
-    if path.startswith("/v1/responses"):
+    if _is_responses_path(path):
         output_items = _build_responses_output_items(state)
         if not text and not output_items:
             return None
@@ -651,7 +676,7 @@ def _canonical_assistant_message_from_response_json(
     path: str,
     response_json: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if path.startswith("/v1/responses"):
+    if _is_responses_path(path):
         return _canonical_assistant_message_from_responses_output(response_json)
     return _canonical_assistant_message_from_chat_response(response_json)
 
@@ -1242,6 +1267,7 @@ def _build_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                         run_id=run_id,
                         request_id=request_id,
                         user_id=user_id,
+                        upstream_api_key=config.upstream_api_key,
                         thread_id=thread_id,
                         task_id=task_id,
                     ),

@@ -13,9 +13,9 @@ export function SidebarNav() {
       <div className="surface-strong sticky top-4 rounded-[1.6rem] p-4">
         <div className="mb-6">
           <div className="text-[11px] uppercase tracking-[0.22em] text-sky-700/80">ClawGraph</div>
-          <div className="mt-2 text-2xl font-semibold">学习数据控制台</div>
+          <div className="mt-2 text-2xl font-semibold">真实流量数据台</div>
           <p className="mt-2 text-sm text-[color:var(--text-muted)]">
-            从证据采集、监督、策展到数据快照、评测与受控替代。
+            从接入、数据准备、人工复核到数据快照和评测验证。
           </p>
         </div>
         <div className="space-y-5">

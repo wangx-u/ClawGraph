@@ -33,7 +33,7 @@ CLAWGRAPH_PYTHON_BIN=python3
 说明：
 
 - `CLAWGRAPH_STORE_URI` 支持相对路径，路径相对于 `clawgraph/web` 目录解析。
-- 本地 store bridge 由 `scripts/prod_dashboard_bundle.py` 负责聚合真实数据。
+- 本地 store bridge 由 `scripts/prod_dashboard_bundle.py` 调用共享 Python read model 聚合真实数据。
 - 当前已验证 `../../tmp-bootstrap.db` 可以成功生成 dashboard bundle。
 
 ## 校验

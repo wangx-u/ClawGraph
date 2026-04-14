@@ -1,11 +1,40 @@
 """ClawGraph package."""
 
-from clawgraph.curation import CandidateRun, CohortFreezeResult, freeze_cohort, list_slice_candidates
+from clawgraph.curation import (
+    CandidateRun,
+    CohortFreezeResult,
+    SliceReviewPlan,
+    freeze_cohort,
+    list_slice_candidates,
+    preview_slice_review_queue,
+)
+from clawgraph.dashboard import (
+    DashboardOverview,
+    DashboardRunRow,
+    DashboardSessionRow,
+    DashboardSliceRow,
+    DashboardSnapshot,
+    build_dashboard_snapshot,
+    inspect_run_workflow,
+)
 from clawgraph.evaluation import (
+    FeedbackSyncResult,
     create_eval_suite_from_cohort,
     enqueue_feedback,
     record_promotion_decision,
     record_scorecard,
+    sync_feedback_queue_from_slice_review,
+    update_feedback_queue_status,
+)
+from clawgraph.judge import JudgeAnnotationPlan, plan_judge_annotation, plan_review_override
+from clawgraph.phase2 import Phase2ExportResult, Phase2RunResult, run_phase2_workflow
+from clawgraph.prepare import (
+    DEFAULT_PREPARE_VERSION,
+    PREPARE_ANNOTATION_KIND,
+    PrepareRunPlan,
+    get_prepare_artifact_for_run,
+    plan_prepare_run_artifact,
+    resolve_prepare_annotation_for_run,
 )
 from clawgraph.protocol.models import (
     ArtifactRecord,
@@ -40,18 +69,42 @@ __all__ = [
     "CohortFreezeResult",
     "CohortMemberRecord",
     "CohortRecord",
+    "DashboardOverview",
+    "DashboardRunRow",
+    "DashboardSessionRow",
+    "DashboardSliceRow",
+    "DashboardSnapshot",
+    "DEFAULT_PREPARE_VERSION",
     "DatasetSnapshotRecord",
     "EvalSuiteRecord",
     "FactEvent",
+    "FeedbackSyncResult",
     "FeedbackQueueRecord",
     "GraphScope",
+    "JudgeAnnotationPlan",
+    "PREPARE_ANNOTATION_KIND",
+    "Phase2ExportResult",
+    "Phase2RunResult",
     "PromotionDecisionRecord",
+    "PrepareRunPlan",
     "ScorecardRecord",
     "SliceRecord",
+    "SliceReviewPlan",
+    "build_dashboard_snapshot",
     "create_eval_suite_from_cohort",
     "enqueue_feedback",
     "freeze_cohort",
+    "inspect_run_workflow",
     "list_slice_candidates",
+    "get_prepare_artifact_for_run",
+    "plan_judge_annotation",
+    "plan_prepare_run_artifact",
+    "plan_review_override",
+    "preview_slice_review_queue",
     "record_promotion_decision",
     "record_scorecard",
+    "resolve_prepare_annotation_for_run",
+    "run_phase2_workflow",
+    "sync_feedback_queue_from_slice_review",
+    "update_feedback_queue_status",
 ]

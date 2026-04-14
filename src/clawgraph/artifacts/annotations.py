@@ -158,9 +158,16 @@ def resolve_e1_annotation_for_run(
 ) -> tuple[dict[str, Any], list[str]]:
     """Resolve the merged E1 annotation payload for one run."""
 
-    session_scoped = [
+    e1_artifacts = [
         artifact
         for artifact in artifacts
+        if artifact.status == "active"
+        and artifact.artifact_type == E1_ANNOTATION_ARTIFACT_TYPE
+        and artifact.payload.get("annotation_kind") == E1_ANNOTATION_KIND
+    ]
+    session_scoped = [
+        artifact
+        for artifact in e1_artifacts
         if artifact.target_ref == f"session:{session_id}"
         or (
             artifact.session_id == session_id
@@ -170,7 +177,7 @@ def resolve_e1_annotation_for_run(
     ]
     run_scoped = [
         artifact
-        for artifact in artifacts
+        for artifact in e1_artifacts
         if artifact.target_ref == f"run:{run_id}" or artifact.run_id == run_id
     ]
 

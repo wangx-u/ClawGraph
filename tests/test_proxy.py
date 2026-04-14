@@ -127,11 +127,21 @@ class ProxyCaptureTest(unittest.TestCase):
     def test_helper_functions(self) -> None:
         url = _resolve_upstream_url("https://example.com", "/v1/chat/completions")
         self.assertEqual(url, "https://example.com/v1/chat/completions")
+        root_chat_url = _resolve_upstream_url(
+            "https://example.com/v1/chat/completions",
+            "/chat/completions",
+        )
+        self.assertEqual(root_chat_url, "https://example.com/v1/chat/completions")
         responses_url = _resolve_upstream_url(
             "https://example.com/v1/chat/completions",
             "/v1/responses",
         )
         self.assertEqual(responses_url, "https://example.com/v1/responses")
+        root_responses_url = _resolve_upstream_url(
+            "https://example.com/v1/chat/completions",
+            "/responses",
+        )
+        self.assertEqual(root_responses_url, "https://example.com/v1/responses")
         prefixed_responses_url = _resolve_upstream_url(
             "https://example.com/openai/v1/chat/completions",
             "/v1/responses",
@@ -146,9 +156,13 @@ class ProxyCaptureTest(unittest.TestCase):
         )
         self.assertEqual(_target_upstream("/v1/chat/completions", config), "https://model.example")
         self.assertEqual(_target_upstream("/v1/responses", config), "https://model.example")
+        self.assertEqual(_target_upstream("/chat/completions", config), "https://model.example")
+        self.assertEqual(_target_upstream("/responses", config), "https://model.example")
         self.assertEqual(_target_upstream("/v1/semantic-events", config), None)
         self.assertEqual(_actor_for_path("/v1/chat/completions"), "model")
         self.assertEqual(_actor_for_path("/v1/responses"), "model")
+        self.assertEqual(_actor_for_path("/chat/completions"), "model")
+        self.assertEqual(_actor_for_path("/responses"), "model")
         self.assertEqual(_actor_for_path("/tools/run"), "tool")
         self.assertEqual(
             _cookie_value({"Cookie": "clawgraph_session_id=sess_cookie"}, "clawgraph_session_id"),
@@ -168,7 +182,7 @@ class ProxyCaptureTest(unittest.TestCase):
         self.assertTrue(_is_streaming_content_type("text/event-stream"))
 
         canonical_chat = _canonical_response_payload(
-            path="/v1/chat/completions",
+            path="/chat/completions",
             response_json={
                 "choices": [
                     {
@@ -204,7 +218,7 @@ class ProxyCaptureTest(unittest.TestCase):
 
         stream_state = {"role": "assistant", "delta_parts": [], "fallback_text": None}
         _update_stream_state(stream_state, fragments)
-        stream_json = _build_stream_response_json("/v1/chat/completions", stream_state)
+        stream_json = _build_stream_response_json("/chat/completions", stream_state)
         self.assertEqual(
             stream_json,
             {"choices": [{"message": {"role": "assistant", "content": "hello"}}]},
@@ -272,7 +286,7 @@ class ProxyCaptureTest(unittest.TestCase):
                 },
             ],
         )
-        tool_stream_json = _build_stream_response_json("/v1/chat/completions", tool_state)
+        tool_stream_json = _build_stream_response_json("/chat/completions", tool_state)
         self.assertEqual(
             tool_stream_json["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
             "lookup",
@@ -337,14 +351,14 @@ class ProxyCaptureTest(unittest.TestCase):
                 },
             ],
         )
-        responses_json = _build_stream_response_json("/v1/responses", responses_state)
+        responses_json = _build_stream_response_json("/responses", responses_state)
         self.assertEqual(responses_json["output_text"], "hello")
         self.assertEqual(responses_json["output"][0]["content"][0]["text"], "hello")
         self.assertEqual(responses_json["output"][1]["name"], "lookup")
         self.assertEqual(responses_json["output"][1]["arguments"], '{"q":"world"}')
 
         canonical_responses = _canonical_response_payload(
-            path="/v1/responses",
+            path="/responses",
             response_json=responses_json,
         )
         self.assertEqual(
@@ -423,6 +437,68 @@ class ProxyCaptureTest(unittest.TestCase):
                 self.assertEqual(facts[0].user_id, "user_test")
                 self.assertEqual(facts[1].request_id, "req_test")
                 self.assertEqual(facts[0].payload["headers"]["Authorization"], "***")
+            finally:
+                proxy.shutdown()
+                upstream.shutdown()
+                proxy.server_close()
+                upstream.server_close()
+                proxy_thread.join(timeout=2)
+                upstream_thread.join(timeout=2)
+
+    def test_proxy_captures_openai_sdk_root_chat_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            store_uri = f"sqlite:///{db_path}"
+
+            try:
+                upstream = ThreadingHTTPServer(("127.0.0.1", 0), _UpstreamHandler)
+            except PermissionError as exc:
+                self.skipTest(f"socket bind not permitted in sandbox: {exc}")
+            upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+            upstream_thread.start()
+
+            upstream_url = (
+                f"http://127.0.0.1:{upstream.server_address[1]}/v1/chat/completions"
+            )
+            proxy = ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                _build_handler(
+                    ProxyConfig(
+                        host="127.0.0.1",
+                        port=0,
+                        store_uri=store_uri,
+                        model_upstream=upstream_url,
+                    )
+                ),
+            )
+            proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+            proxy_thread.start()
+
+            try:
+                payload = json.dumps(
+                    {
+                        "messages": [{"role": "user", "content": "sdk-root"}],
+                    }
+                ).encode("utf-8")
+                request = Request(
+                    f"http://127.0.0.1:{proxy.server_address[1]}/chat/completions",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+
+                self.assertEqual(body["choices"][0]["message"]["content"], "echo:sdk-root")
+                self.assertEqual(_UpstreamHandler.last_path, "/v1/chat/completions")
+
+                store = SQLiteFactStore(store_uri)
+                session_id = store.get_latest_session_id()
+                self.assertIsNotNone(session_id)
+                facts = store.list_facts(session_id=session_id)
+                self.assertEqual(len(facts), 2)
+                self.assertEqual(facts[0].payload["path"], "/chat/completions")
+                self.assertEqual(facts[1].payload["path"], "/chat/completions")
             finally:
                 proxy.shutdown()
                 upstream.shutdown()
@@ -950,6 +1026,67 @@ class ProxyCaptureTest(unittest.TestCase):
                 }
                 self.assertEqual(sanitized_headers["authorization"], "***")
                 self.assertEqual(sanitized_headers["x-clawgraph-proxy-auth"], "***")
+            finally:
+                proxy.shutdown()
+                upstream.shutdown()
+                proxy.server_close()
+                upstream.server_close()
+                proxy_thread.join(timeout=2)
+                upstream_thread.join(timeout=2)
+
+    def test_proxy_can_inject_upstream_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "facts.db"
+            store_uri = f"sqlite:///{db_path}"
+
+            try:
+                upstream = ThreadingHTTPServer(("127.0.0.1", 0), _UpstreamHandler)
+            except PermissionError as exc:
+                self.skipTest(f"socket bind not permitted in sandbox: {exc}")
+            upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+            upstream_thread.start()
+
+            proxy = ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                _build_handler(
+                    ProxyConfig(
+                        host="127.0.0.1",
+                        port=0,
+                        store_uri=store_uri,
+                        model_upstream=f"http://127.0.0.1:{upstream.server_address[1]}/v1/chat/completions",
+                        upstream_api_key="upstream-secret",
+                    )
+                ),
+            )
+            proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+            proxy_thread.start()
+
+            try:
+                payload = json.dumps({"messages": [{"role": "user", "content": "hello"}]}).encode(
+                    "utf-8"
+                )
+                request = Request(
+                    f"http://127.0.0.1:{proxy.server_address[1]}/v1/chat/completions",
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer client-placeholder",
+                        "x-clawgraph-session-id": "session_upstream_auth",
+                    },
+                    method="POST",
+                )
+                with urlopen(request) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+
+                self.assertEqual(body["choices"][0]["message"]["content"], "echo:hello")
+                self.assertEqual(_UpstreamHandler.last_authorization, "Bearer upstream-secret")
+
+                store = SQLiteFactStore(store_uri)
+                facts = store.list_facts("session_upstream_auth")
+                sanitized_headers = {
+                    key.lower(): value for key, value in facts[0].payload["headers"].items()
+                }
+                self.assertEqual(sanitized_headers["authorization"], "***")
             finally:
                 proxy.shutdown()
                 upstream.shutdown()

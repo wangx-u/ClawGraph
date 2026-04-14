@@ -1224,6 +1224,92 @@ class SQLiteFactStore:
             rows = connection.execute(query, values).fetchall()
         return [self._row_to_feedback_queue(row) for row in rows]
 
+    def get_feedback_queue_item(self, feedback_id: str) -> FeedbackQueueRecord | None:
+        """Return one feedback queue item by id."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM feedback_queue
+                WHERE feedback_id = ?
+                LIMIT 1
+                """,
+                [feedback_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_feedback_queue(row)
+
+    def update_feedback_queue_status(
+        self,
+        *,
+        status: str,
+        feedback_id: str | None = None,
+        slice_id: str | None = None,
+        target_ref: str | None = None,
+        from_status: str | None = None,
+        metadata_patch: dict[str, Any] | None = None,
+    ) -> list[FeedbackQueueRecord]:
+        """Update one or more feedback queue item statuses."""
+
+        if feedback_id is None and target_ref is None and slice_id is None:
+            raise ValueError("feedback_id, target_ref, or slice_id is required")
+        metadata_patch = metadata_patch or {}
+        with closing(self._connect()) as connection:
+            query = "SELECT * FROM feedback_queue"
+            clauses: list[str] = []
+            values: list[str] = []
+            if feedback_id is not None:
+                clauses.append("feedback_id = ?")
+                values.append(feedback_id)
+            if slice_id is not None:
+                clauses.append("slice_id = ?")
+                values.append(slice_id)
+            if target_ref is not None:
+                clauses.append("target_ref = ?")
+                values.append(target_ref)
+            if from_status is not None:
+                clauses.append("status = ?")
+                values.append(from_status)
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
+            query += " ORDER BY created_at DESC, seq DESC"
+            rows = connection.execute(query, values).fetchall()
+            updated: list[FeedbackQueueRecord] = []
+            for row in rows:
+                record = self._row_to_feedback_queue(row)
+                merged_metadata = dict(record.metadata)
+                merged_metadata.update(metadata_patch)
+                updated_record = FeedbackQueueRecord(
+                    feedback_id=record.feedback_id,
+                    schema_version=record.schema_version,
+                    slice_id=record.slice_id,
+                    source=record.source,
+                    status=status,
+                    target_ref=record.target_ref,
+                    reason=record.reason,
+                    payload=record.payload,
+                    created_at=record.created_at,
+                    metadata=merged_metadata,
+                )
+                validate_feedback_queue_record(updated_record)
+                connection.execute(
+                    """
+                    UPDATE feedback_queue
+                    SET status = ?, metadata_json = ?
+                    WHERE feedback_id = ?
+                    """,
+                    [
+                        updated_record.status,
+                        json.dumps(updated_record.metadata, ensure_ascii=True, sort_keys=True),
+                        updated_record.feedback_id,
+                    ],
+                )
+                updated.append(updated_record)
+            connection.commit()
+        return updated
+
     def append_artifact(self, artifact: ArtifactRecord) -> None:
         """Persist an external supervision artifact."""
 
