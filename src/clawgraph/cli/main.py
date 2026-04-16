@@ -45,6 +45,19 @@ from clawgraph.graph import (
     render_session_inspect,
     render_session_replay,
 )
+from clawgraph.integrations.logits import (
+    create_router_handoff_manifest,
+    evaluate_candidate_on_suite,
+    load_manifest as load_logits_manifest,
+    prepare_dpo_training_request,
+    prepare_rl_training_request,
+    prepare_sft_training_request,
+    submit_training_request,
+)
+from clawgraph.integrations.logits.manifests import (
+    ModelCandidateManifest,
+    TrainingRequestManifest,
+)
 from clawgraph.judge import plan_judge_annotation, plan_review_override
 from clawgraph.phase2 import run_phase2_workflow
 from clawgraph.protocol.factories import (
@@ -805,6 +818,143 @@ def _build_parser() -> argparse.ArgumentParser:
     phase2_run.add_argument("--feedback-source", default="phase2.auto_review")
     phase2_run.add_argument("--dry-run", action="store_true")
     phase2_run.add_argument("--json", action="store_true")
+
+    logits_parser = subparsers.add_parser(
+        "logits",
+        help="Bridge dataset snapshots to Logits training, evaluation, and router handoff",
+    )
+    logits_subparsers = logits_parser.add_subparsers(dest="logits_command")
+
+    logits_prepare_sft = logits_subparsers.add_parser(
+        "prepare-sft",
+        help="Adapt one SFT snapshot and emit a Logits training request manifest",
+    )
+    logits_prepare_sft.add_argument("--store", default=DEFAULT_STORE_URI)
+    logits_prepare_sft.add_argument("--dataset-snapshot-id", required=True)
+    logits_prepare_sft.add_argument("--output-dir", type=Path, required=True)
+    logits_prepare_sft.add_argument("--base-model", required=True)
+    logits_prepare_sft.add_argument("--renderer-name")
+    logits_prepare_sft.add_argument("--log-path")
+    logits_prepare_sft.add_argument("--base-url")
+    logits_prepare_sft.add_argument("--api-key-env", default="LOGITS_API_KEY")
+    logits_prepare_sft.add_argument("--load-checkpoint-path")
+    logits_prepare_sft.add_argument("--learning-rate", type=float, default=2e-4)
+    logits_prepare_sft.add_argument("--lr-schedule", default="linear")
+    logits_prepare_sft.add_argument("--num-epochs", type=int, default=1)
+    logits_prepare_sft.add_argument("--lora-rank", type=int, default=32)
+    logits_prepare_sft.add_argument("--batch-size", type=int, default=128)
+    logits_prepare_sft.add_argument("--max-length", type=int, default=32768)
+    logits_prepare_sft.add_argument("--test-size", type=int, default=0)
+    logits_prepare_sft.add_argument("--eval-every", type=int, default=10)
+    logits_prepare_sft.add_argument("--save-every", type=int, default=20)
+    logits_prepare_sft.add_argument("--ttl-seconds", type=int, default=604800)
+    logits_prepare_sft.add_argument("--max-steps", type=int)
+    logits_prepare_sft.add_argument("--wandb-project")
+    logits_prepare_sft.add_argument("--wandb-name")
+    logits_prepare_sft.add_argument("--metadata", default="{}")
+    logits_prepare_sft.add_argument("--manifest-out", type=Path)
+    logits_prepare_sft.add_argument("--json", action="store_true")
+
+    logits_prepare_dpo = logits_subparsers.add_parser(
+        "prepare-dpo",
+        help="Adapt one preference snapshot and emit a Logits DPO training request manifest",
+    )
+    logits_prepare_dpo.add_argument("--store", default=DEFAULT_STORE_URI)
+    logits_prepare_dpo.add_argument("--dataset-snapshot-id", required=True)
+    logits_prepare_dpo.add_argument("--output-dir", type=Path, required=True)
+    logits_prepare_dpo.add_argument("--base-model", required=True)
+    logits_prepare_dpo.add_argument("--renderer-name")
+    logits_prepare_dpo.add_argument("--log-path")
+    logits_prepare_dpo.add_argument("--base-url")
+    logits_prepare_dpo.add_argument("--api-key-env", default="LOGITS_API_KEY")
+    logits_prepare_dpo.add_argument("--load-checkpoint-path")
+    logits_prepare_dpo.add_argument("--learning-rate", type=float, default=1e-5)
+    logits_prepare_dpo.add_argument("--lr-schedule", default="linear")
+    logits_prepare_dpo.add_argument("--num-epochs", type=int, default=1)
+    logits_prepare_dpo.add_argument("--dpo-beta", type=float, default=0.1)
+    logits_prepare_dpo.add_argument("--lora-rank", type=int, default=32)
+    logits_prepare_dpo.add_argument("--batch-size", type=int, default=256)
+    logits_prepare_dpo.add_argument("--max-length", type=int, default=8192)
+    logits_prepare_dpo.add_argument("--test-size", type=int, default=0)
+    logits_prepare_dpo.add_argument("--eval-every", type=int, default=10)
+    logits_prepare_dpo.add_argument("--save-every", type=int, default=20)
+    logits_prepare_dpo.add_argument("--ttl-seconds", type=int, default=604800)
+    logits_prepare_dpo.add_argument("--max-steps", type=int)
+    logits_prepare_dpo.add_argument("--wandb-project")
+    logits_prepare_dpo.add_argument("--wandb-name")
+    logits_prepare_dpo.add_argument("--metadata", default="{}")
+    logits_prepare_dpo.add_argument("--manifest-out", type=Path)
+    logits_prepare_dpo.add_argument("--json", action="store_true")
+
+    logits_prepare_rl = logits_subparsers.add_parser(
+        "prepare-rl",
+        help="Emit a generic environment-driven Logits RL training request manifest",
+    )
+    logits_prepare_rl.add_argument("--output-dir", type=Path, required=True)
+    logits_prepare_rl.add_argument("--base-model", required=True)
+    logits_prepare_rl.add_argument("--dataset-builder-ref", required=True)
+    logits_prepare_rl.add_argument("--dataset-builder-kwargs", default="{}")
+    logits_prepare_rl.add_argument("--renderer-name")
+    logits_prepare_rl.add_argument("--log-path")
+    logits_prepare_rl.add_argument("--base-url")
+    logits_prepare_rl.add_argument("--api-key-env", default="LOGITS_API_KEY")
+    logits_prepare_rl.add_argument("--load-checkpoint-path")
+    logits_prepare_rl.add_argument("--slice-id")
+    logits_prepare_rl.add_argument("--eval-suite-id")
+    logits_prepare_rl.add_argument("--learning-rate", type=float, default=4e-5)
+    logits_prepare_rl.add_argument("--max-tokens", type=int, default=256)
+    logits_prepare_rl.add_argument("--lora-rank", type=int, default=32)
+    logits_prepare_rl.add_argument("--eval-every", type=int, default=20)
+    logits_prepare_rl.add_argument("--save-every", type=int, default=20)
+    logits_prepare_rl.add_argument("--max-steps", type=int)
+    logits_prepare_rl.add_argument("--metadata", default="{}")
+    logits_prepare_rl.add_argument("--manifest-out", type=Path)
+    logits_prepare_rl.add_argument("--json", action="store_true")
+
+    logits_submit = logits_subparsers.add_parser(
+        "submit",
+        help="Submit one Logits training request manifest and emit a candidate manifest",
+    )
+    logits_submit.add_argument("--manifest", type=Path, required=True)
+    logits_submit.add_argument("--executor-ref")
+    logits_submit.add_argument("--candidate-out", type=Path)
+    logits_submit.add_argument("--json", action="store_true")
+
+    logits_evaluate = logits_subparsers.add_parser(
+        "evaluate",
+        help="Run one candidate against a frozen eval suite and write back scorecard/promotion",
+    )
+    logits_evaluate.add_argument("--store", default=DEFAULT_STORE_URI)
+    logits_evaluate.add_argument("--eval-suite-id", required=True)
+    logits_evaluate.add_argument("--candidate-manifest", type=Path, required=True)
+    logits_evaluate.add_argument("--baseline-model", required=True)
+    logits_evaluate.add_argument("--baseline-model-path")
+    logits_evaluate.add_argument("--grader", default="exact-match")
+    logits_evaluate.add_argument("--grader-ref")
+    logits_evaluate.add_argument("--thresholds")
+    logits_evaluate.add_argument("--max-tokens", type=int, default=512)
+    logits_evaluate.add_argument("--temperature", type=float, default=0.0)
+    logits_evaluate.add_argument("--top-p", type=float, default=1.0)
+    logits_evaluate.add_argument("--base-url")
+    logits_evaluate.add_argument("--scorecard-metadata", default="{}")
+    logits_evaluate.add_argument("--record-promotion", action="store_true")
+    logits_evaluate.add_argument("--promotion-stage", default="offline")
+    logits_evaluate.add_argument("--coverage-policy-version", default="logits.eval.v1")
+    logits_evaluate.add_argument("--promotion-summary")
+    logits_evaluate.add_argument("--rollback-conditions", default="[]")
+    logits_evaluate.add_argument("--output", type=Path)
+    logits_evaluate.add_argument("--json", action="store_true")
+
+    logits_handoff = logits_subparsers.add_parser(
+        "handoff",
+        help="Create one router handoff manifest from a promotion decision and candidate",
+    )
+    logits_handoff.add_argument("--store", default=DEFAULT_STORE_URI)
+    logits_handoff.add_argument("--candidate-manifest", type=Path, required=True)
+    logits_handoff.add_argument("--promotion-decision-id", required=True)
+    logits_handoff.add_argument("--metadata", default="{}")
+    logits_handoff.add_argument("--output", type=Path)
+    logits_handoff.add_argument("--json", action="store_true")
 
     return parser
 
@@ -1729,6 +1879,208 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(str(exc)) from exc
         return 0
 
+    if args.command == "logits" and args.logits_command == "prepare-sft":
+        try:
+            manifest = prepare_sft_training_request(
+                store_uri=args.store,
+                dataset_snapshot_id=args.dataset_snapshot_id,
+                output_dir=args.output_dir,
+                base_model=args.base_model,
+                renderer_name=args.renderer_name,
+                log_path=args.log_path,
+                base_url=args.base_url,
+                api_key_env=args.api_key_env,
+                load_checkpoint_path=args.load_checkpoint_path,
+                learning_rate=args.learning_rate,
+                lr_schedule=args.lr_schedule,
+                num_epochs=args.num_epochs,
+                lora_rank=args.lora_rank,
+                batch_size=args.batch_size,
+                max_length=args.max_length,
+                test_size=args.test_size,
+                eval_every=args.eval_every,
+                save_every=args.save_every,
+                ttl_seconds=args.ttl_seconds,
+                max_steps=args.max_steps,
+                wandb_project=args.wandb_project,
+                wandb_name=args.wandb_name,
+                metadata=_load_json_argument(args.metadata, label="metadata"),
+                manifest_path=args.manifest_out,
+            )
+            _print_output(
+                manifest.to_dict()
+                if args.json
+                else _render_training_request_manifest(manifest)
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "logits" and args.logits_command == "prepare-dpo":
+        try:
+            manifest = prepare_dpo_training_request(
+                store_uri=args.store,
+                dataset_snapshot_id=args.dataset_snapshot_id,
+                output_dir=args.output_dir,
+                base_model=args.base_model,
+                renderer_name=args.renderer_name,
+                log_path=args.log_path,
+                base_url=args.base_url,
+                api_key_env=args.api_key_env,
+                load_checkpoint_path=args.load_checkpoint_path,
+                learning_rate=args.learning_rate,
+                lr_schedule=args.lr_schedule,
+                num_epochs=args.num_epochs,
+                dpo_beta=args.dpo_beta,
+                lora_rank=args.lora_rank,
+                batch_size=args.batch_size,
+                max_length=args.max_length,
+                test_size=args.test_size,
+                eval_every=args.eval_every,
+                save_every=args.save_every,
+                ttl_seconds=args.ttl_seconds,
+                max_steps=args.max_steps,
+                wandb_project=args.wandb_project,
+                wandb_name=args.wandb_name,
+                metadata=_load_json_argument(args.metadata, label="metadata"),
+                manifest_path=args.manifest_out,
+            )
+            _print_output(
+                manifest.to_dict()
+                if args.json
+                else _render_training_request_manifest(manifest)
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "logits" and args.logits_command == "prepare-rl":
+        try:
+            manifest = prepare_rl_training_request(
+                output_dir=args.output_dir,
+                base_model=args.base_model,
+                dataset_builder_ref=args.dataset_builder_ref,
+                dataset_builder_kwargs=_load_json_argument(
+                    args.dataset_builder_kwargs,
+                    label="dataset_builder_kwargs",
+                ),
+                renderer_name=args.renderer_name,
+                log_path=args.log_path,
+                base_url=args.base_url,
+                api_key_env=args.api_key_env,
+                load_checkpoint_path=args.load_checkpoint_path,
+                slice_id=args.slice_id,
+                eval_suite_id=args.eval_suite_id,
+                learning_rate=args.learning_rate,
+                max_tokens=args.max_tokens,
+                lora_rank=args.lora_rank,
+                eval_every=args.eval_every,
+                save_every=args.save_every,
+                max_steps=args.max_steps,
+                metadata=_load_json_argument(args.metadata, label="metadata"),
+                manifest_path=args.manifest_out,
+            )
+            _print_output(
+                manifest.to_dict()
+                if args.json
+                else _render_training_request_manifest(manifest)
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "logits" and args.logits_command == "submit":
+        try:
+            loaded_manifest = load_logits_manifest(args.manifest)
+            if not isinstance(loaded_manifest, TrainingRequestManifest):
+                raise ValueError("submit requires a training request manifest")
+            if args.executor_ref:
+                loaded_manifest.runtime_config["executor_ref"] = args.executor_ref
+            candidate = submit_training_request(
+                loaded_manifest,
+                candidate_path=args.candidate_out,
+            )
+            _print_output(
+                candidate.to_dict()
+                if args.json
+                else _render_candidate_manifest(candidate)
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "logits" and args.logits_command == "evaluate":
+        try:
+            loaded_candidate = load_logits_manifest(args.candidate_manifest)
+            if not isinstance(loaded_candidate, ModelCandidateManifest):
+                raise ValueError("evaluate requires a model candidate manifest")
+            thresholds = (
+                _load_json_argument(args.thresholds, label="thresholds")
+                if args.thresholds
+                else None
+            )
+            rollback_conditions_value = _load_json_value(
+                args.rollback_conditions,
+                label="rollback_conditions",
+            )
+            rollback_conditions = (
+                rollback_conditions_value if isinstance(rollback_conditions_value, list) else []
+            )
+            manifest, scorecard, promotion = evaluate_candidate_on_suite(
+                store_uri=args.store,
+                eval_suite_id=args.eval_suite_id,
+                candidate_manifest=loaded_candidate,
+                baseline_model=args.baseline_model,
+                baseline_model_path=args.baseline_model_path,
+                grader_name=args.grader,
+                grader_ref=args.grader_ref,
+                thresholds=thresholds,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                base_url=args.base_url,
+                scorecard_metadata=_load_json_argument(
+                    args.scorecard_metadata,
+                    label="scorecard_metadata",
+                ),
+                record_promotion=args.record_promotion,
+                promotion_stage=args.promotion_stage,
+                coverage_policy_version=args.coverage_policy_version,
+                promotion_summary=args.promotion_summary,
+                rollback_conditions=rollback_conditions,
+                output_path=args.output,
+            )
+            payload = {
+                "eval_execution": manifest.to_dict(),
+                "scorecard": scorecard.to_dict(),
+                "promotion": None if promotion is None else promotion.to_dict(),
+            }
+            _print_output(payload if args.json else _render_eval_execution_payload(payload))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
+    if args.command == "logits" and args.logits_command == "handoff":
+        try:
+            loaded_candidate = load_logits_manifest(args.candidate_manifest)
+            if not isinstance(loaded_candidate, ModelCandidateManifest):
+                raise ValueError("handoff requires a model candidate manifest")
+            handoff = create_router_handoff_manifest(
+                store_uri=args.store,
+                candidate_manifest=loaded_candidate,
+                promotion_decision_id=args.promotion_decision_id,
+                output_path=args.output,
+                metadata=_load_json_argument(args.metadata, label="metadata"),
+            )
+            _print_output(
+                handoff.to_dict()
+                if args.json
+                else _render_router_handoff_manifest(handoff)
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        return 0
+
     if args.command == "phase2" and args.phase2_command == "run":
         try:
             judge_api_key = args.judge_api_key or os.getenv(args.judge_api_key_env)
@@ -2412,6 +2764,57 @@ def _render_phase2_run(payload: dict) -> str:
         lines.extend(f"- {warning}" for warning in payload["warnings"])
     if payload["stopped_reason"]:
         lines.append(f"Stopped at: {payload['stopped_reason']}")
+    return "\n".join(lines)
+
+
+def _render_training_request_manifest(manifest: TrainingRequestManifest) -> str:
+    lines = [
+        f"Training request: {manifest.training_request_id}",
+        f"Recipe: {manifest.recipe_family} ({manifest.recipe_name})",
+        f"Base model: {manifest.base_model}",
+        f"Dataset snapshot: {manifest.dataset_snapshot_id or '-'}",
+        f"Input path: {manifest.input_path or '-'}",
+        f"Log path: {manifest.log_path}",
+    ]
+    return "\n".join(lines)
+
+
+def _render_candidate_manifest(candidate: ModelCandidateManifest) -> str:
+    lines = [
+        f"Candidate: {candidate.candidate_model_id}",
+        f"Recipe: {candidate.recipe_family} ({candidate.training_recipe})",
+        f"Checkpoint path: {candidate.checkpoint_path or '-'}",
+        f"Sampler path: {candidate.sampler_path or '-'}",
+        f"Log path: {candidate.log_path or '-'}",
+    ]
+    return "\n".join(lines)
+
+
+def _render_eval_execution_payload(payload: dict[str, Any]) -> str:
+    manifest = payload["eval_execution"]
+    scorecard = payload["scorecard"]
+    promotion = payload.get("promotion")
+    lines = [
+        f"Eval execution: {manifest['eval_execution_id']}",
+        f"Eval suite: {manifest['eval_suite_id']}",
+        f"Candidate model: {manifest['candidate_model_id']}",
+        f"Scorecard: {scorecard['scorecard_id']} verdict={scorecard['verdict']}",
+    ]
+    if promotion is not None:
+        lines.append(
+            f"Promotion: {promotion['promotion_decision_id']} decision={promotion['decision']}"
+        )
+    return "\n".join(lines)
+
+
+def _render_router_handoff_manifest(payload) -> str:
+    lines = [
+        f"Handoff: {payload.handoff_id}",
+        f"Slice: {payload.slice_id}",
+        f"Stage: {payload.stage}",
+        f"Decision: {payload.decision}",
+        f"Candidate model: {payload.candidate_model_id}",
+    ]
     return "\n".join(lines)
 
 

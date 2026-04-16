@@ -163,8 +163,6 @@ PYTHONPATH=src ./.venv/bin/python -m clawgraph.cli.main phase2 run \
   --holdout-fraction 0.5 \
   --create-eval-suite \
   --suite-kind offline_test \
-  --scorecard-metrics '{"task_success_rate": 0.96, "verifier_pass_rate": 0.94, "p95_latency": 420}' \
-  --scorecard-thresholds '{"task_success_rate": {"op": "gte", "value": 0.95}, "verifier_pass_rate": {"op": "gte", "value": 0.90}, "p95_latency": {"op": "lte", "value": 500}}' \
   --candidate-model small-v1 \
   --baseline-model large-v1 \
   --promotion-stage offline \

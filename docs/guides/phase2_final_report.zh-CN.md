@@ -63,6 +63,15 @@
 - dataset export
 - eval suite / scorecard / promotion decision
 
+当前实现已经进一步收敛为：
+
+- 当 run 或 evaluation cohort 中存在通用 `score` artifact 时，
+  `phase2 run` 可以自动推导 scorecard
+- 在未显式传入 `scorecard_metrics / scorecard_thresholds` 时，也能继续生成
+  promotion decision
+- `run_phase2_live_validation.sh` 已切换到自动闭环路径，不再手工注入固定
+  scorecard 指标
+
 ### 2.3 Judge 与人工复核
 
 扩展：
@@ -90,9 +99,36 @@
 - `补标签` -> `数据准备`
 - `样本治理` -> `数据筛选`
 - `回流` -> `人工复核`
+- `任务识别清晰度` -> `任务标签覆盖率`
+- `语义覆盖率` -> `决策语义覆盖率`
+- `可评估运行` -> `已生成验证资产`
 
 目的不是改对象模型，而是让展示更专业、流程更清楚、空态不再混入 mock
 叙事。
+
+当前 UI 还额外收敛了两点：
+
+- session / run 以任务标题、仓库和实例摘要为主，原始 `sess_xxx` /
+  `run_xxx` 只作为次级信息保留
+- replay / access 以步骤类型和摘要为主，原始 `/chat/completions` 路径
+  只保留为技术明细
+
+### 2.5 Web 可操作闭环与浏览器回归
+
+新增：
+
+- [web/src/app/feedback/actions.ts](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/src/app/feedback/actions.ts)
+- [web/src/lib/dashboard-actions.ts](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/src/lib/dashboard-actions.ts)
+- [web/scripts/prod_dashboard_action.py](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/scripts/prod_dashboard_action.py)
+- [web/e2e/dashboard-regression.spec.ts](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/e2e/dashboard-regression.spec.ts)
+
+当前 Web 侧已经不是只读监控面板，而是具备以下能力：
+
+- 在 `local-store` 模式下直接完成人工确认、标记 reviewed、关闭 feedback
+- 数据集 / cohort / evaluation 详情页只展示真实 manifest 字段，不再展示伪造信息
+- 用 Playwright 覆盖首页、接入页、详情页和人工复核关键路径
+- 用真实 bundle 验证“人类可读标题 + 真实 manifest + 可操作复核”这一套
+  对外展示路径
 
 ## 3. 关键修复
 
@@ -189,10 +225,10 @@ web 读取的同口径 bundle：
 
 说明：
 
-- 本轮最终 live 验证使用了 CLI snapshot 和 web bundle JSON
-- 当前执行沙箱不允许再新开一个本地 Next dev 监听端口
-- 但 `web` 侧构建与 typecheck 已通过，且 bundle 来自同一份
-  `dashboard_bundle` 读模型，因此页面消费的数据口径已经完成联调
+- live store 的 CLI snapshot、web bundle 和页面读取逻辑已经统一到同一份
+  `dashboard_bundle` 读模型
+- 后续补充的浏览器回归已覆盖首页、接入页、manifest 详情页和人工复核操作
+- 因此当前不是“只有 bundle JSON 对齐”，而是“页面口径和关键交互也已经完成验证”
 
 ## 5. mini-SWE-agent 真实接入证据
 
@@ -294,8 +330,10 @@ evaluation/holdout cohort，而不是丢失。
 - 继续复用本地 testbed 的 GitHub archive fallback，避免 `git fetch`
   的 HTTP2 抖动把整轮 collection 打断
 - 把 dashboard 对外文案进一步收敛成
-  `请求归属清晰度 / 任务识别清晰度 / 未闭合 / 可导出数据类型`
+  `请求归属清晰度 / 任务标签覆盖率 / 决策语义覆盖率 / 已生成验证资产`
   这类更适合展示和排障的说法
+- 把 Web 反馈页补成可操作闭环，而不再要求用户回到 CLI 完成人工复核
+- 补齐浏览器级回归，保证这些对外页面和关键路径不会静默回退到伪数据
 
 ## 8. 结论
 
@@ -304,5 +342,7 @@ phase 2 已经达到“完整直接可用”的状态：
 - 主链路完整
 - 低置信 review 与人工 override 都可用
 - export / eval / promotion 已串通
+- Web 页面已和真实 store / manifest / feedback 写操作对齐
+- 浏览器级回归已覆盖关键产品路径
 - mini-SWE-agent + proxy + dashboard 已在真实 store 上联通
 - 保持了通用适配，没有为 benchmark 写框架专用分支

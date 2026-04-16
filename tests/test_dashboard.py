@@ -152,6 +152,7 @@ class DashboardSnapshotTest(unittest.TestCase):
             }
             readiness = {item["builder"]: item for item in bundle["readinessRows"]}
             workflow_runs = {item["runId"]: item for item in bundle["workflowRuns"]}
+            replay_records = {item["runId"]: item for item in bundle["replayRecords"]}
 
             self.assertEqual(metrics["验证资产"]["value"], "1")
             self.assertEqual(metrics["可导出运行"]["value"], "2")
@@ -164,10 +165,19 @@ class DashboardSnapshotTest(unittest.TestCase):
             self.assertEqual(bundle["ingestSummary"]["taskCoverage"], "67%")
             self.assertEqual(bundle["ingestSummary"]["decisionCoverage"], "33%")
             self.assertEqual(bundle["ingestSummary"]["evaluationAssetCount"], 1)
+            self.assertTrue(bundle["ingestSummary"]["latestSessionTitle"])
             self.assertIn("到", bundle["snapshots"][0]["timeRangeLabel"])
             self.assertIn("质量", bundle["cohorts"][0]["qualityGateLabel"])
             self.assertTrue(readiness["sft"]["ready"])
             self.assertNotIn("facts", readiness)
+            self.assertTrue(runs["run_1"]["title"])
+            self.assertTrue(runs["run_1"]["summary"])
+            self.assertTrue(all("run_" not in anomaly for anomaly in sessions["session_1"]["anomalies"]))
+            self.assertEqual(replay_records["run_1"]["requests"][0]["stepType"], "模型推理")
+            self.assertEqual(replay_records["run_1"]["requests"][0]["pathLabel"], "对话推理")
+            self.assertTrue(replay_records["run_1"]["requests"][0]["summary"])
+            self.assertTrue(replay_records["run_1"]["branches"][0]["title"])
+            self.assertTrue(replay_records["run_1"]["branches"][0]["summary"])
 
     def test_inferred_only_branching_is_advisory_not_review_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -84,7 +84,7 @@ OpenClaw / agent runtime
 - `pipeline run`
 - `dataset snapshot` 持久化
 
-已实现领域模型和存储，但 CLI/交互尚未完整产品化的能力：
+已经具备服务层与 Web 产品闭环的能力：
 
 - `eval suite`
 - `scorecard`
@@ -97,6 +97,25 @@ OpenClaw / agent runtime
 - `rollout stage`
 - `route policy`
 - 面向替代验证的 shadow / canary / rollback 控制面
+
+### 2.5 当前实现对齐说明（2026-04）
+
+相对于本文最初版本，当前产品落地有几处需要明确对齐：
+
+1. 顶层指标口径已统一为：
+   `请求归属清晰度 / 任务标签覆盖率 / 决策语义覆盖率 / 已生成验证资产`。
+   旧文案如“任务识别清晰度”或“可评估运行”不再代表当前产品语义。
+2. 数据集、cohort、evaluation 详情页现在只展示真实 manifest 字段。
+   没有真实字段时应显示空态，而不是填入示例文本。
+3. `Feedback` 不再只是只读队列。在 `local-store` 模式下，Web 可以直接执行
+   `review / resolve / override`。
+4. `Evaluation` 不再要求人工额外喂入 scorecard 才能走到 promotion。
+   当通用 `score` artifact 可用时，phase 2 会自动推导 scorecard 和 promotion。
+5. Web 已补充浏览器级回归，至少覆盖首页、接入页、manifest 详情页和人工复核关键路径。
+6. 面向用户的主信息已从 raw id / 接口路径切换到任务标题、仓库摘要和步骤类型；
+   `sess_xxx`、`run_xxx`、`/chat/completions` 仍保留，但只作为二级技术信息。
+7. benchmark collection 默认支持 named instance pack，用于跨 repo、多类型任务的持续沉淀，
+   不再依赖手写的单一实例列表。
 
 ## 3. Dashboard 的总定位
 
@@ -152,16 +171,16 @@ Dashboard 应定位为：
 
 | Dashboard 模块 | 对应 ClawGraph 层 / 对象 | 核心能力 | 目标用户 | 成熟度 |
 | --- | --- | --- | --- | --- |
-| `Overview` | 聚合层，不新增事实源 | 全局健康、资产产出、替代机会 | PM、BD、负责人 | 可立即设计 |
+| `Overview` | 聚合层，不新增事实源 | 全局健康、资产产出、替代机会 | PM、BD、负责人 | 已实现 |
 | `Access` | `proxy`、payload、runtime integration | 接入、监控、身份上下文、语义接入 | 平台、Runtime 工程师 | 已实现 |
 | `Session Inbox` | `session/run/request/fact` | 新采集运行总览、质量分诊、E0/E1/E2 判定 | 平台、评估、运营 | 已实现 |
 | `Replay` | `branch`、`replay`、`inspect` | 轨迹回放、分支树、失败排查 | Runtime、评估、RL | 已实现 |
 | `Supervision` | `semantic event`、`artifact` | 语义声明、bootstrap、打分、偏好、标签治理 | 评估、RL | 已实现 |
-| `Curation` | `slice`、candidate pool、`cohort` | 切片、筛选、冻结、holdout、review queue | RL、数据运营、PM | 大部分已实现 |
+| `Curation` | `slice`、candidate pool、`cohort` | 切片、筛选、冻结、holdout、review queue | RL、数据运营、PM | 已实现，策略仍可继续增强 |
 | `Datasets` | readiness、builder、`dataset snapshot`、export | 训练样本预览、split、manifest、导出 | RL、平台 | 已实现 |
-| `Evaluation` | `eval suite`、`scorecard`、`promotion decision` | 替代验证、离线/回归/影子评测 | 评估、PM、BD | 服务层已实现 |
+| `Evaluation` | `eval suite`、`scorecard`、`promotion decision` | 替代验证、离线/回归/影子评测 | 评估、PM、BD | 已实现，自动闭环已接通 |
 | `Coverage` | coverage policy、route policy、rollout | 哪些 slice 允许小模型覆盖 | PM、BD、平台 | 设计已明确 |
-| `Feedback` | `feedback queue`、cohort refresh | fallback / disagreement / verifier fail 回流 | 评估、训练、运营 | 服务层已实现 |
+| `Feedback` | `feedback queue`、cohort refresh | fallback / disagreement / verifier fail 回流 | 评估、训练、运营 | 已实现，Web 在 local-store 模式下可直接操作 |
 
 ### 4.3 对象关系图
 

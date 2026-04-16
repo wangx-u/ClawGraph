@@ -18,6 +18,24 @@ test("首页和接入页展示真实数据口径", async ({ page }) => {
   await expect(page.getByText("请求归属清晰度")).toBeVisible();
   await expect(page.getByText("任务标签覆盖率")).toBeVisible();
   await expect(page.getByText("决策语义覆盖率")).toBeVisible();
+  await expect(page.getByText("SQLFluff #1625").first()).toBeVisible();
+});
+
+test("Session 和 Replay 页面优先展示任务标题、步骤类型和自动摘要", async ({ page }) => {
+  await page.goto("/sessions/session_train_e2e");
+
+  await expect(page.locator("h1", { hasText: "SQLFluff #1625" })).toBeVisible();
+  await expect(page.getByText(/会话 session_…in_e2e/)).toBeVisible();
+  await expect(page.getByText("可筛选").first()).toBeVisible();
+  await expect(page.getByText("待复核").first()).toBeVisible();
+  await expect(page.getByText("运行 run_train_e2e")).toBeVisible();
+
+  await page.goto("/sessions/session_train_e2e/runs/run_train_e2e/replay");
+
+  await expect(page.locator("h1", { hasText: "回放 SQLFluff #1625" })).toBeVisible();
+  await expect(page.getByText("模型推理").first()).toBeVisible();
+  await expect(page.getByText("对话推理").first()).toBeVisible();
+  await expect(page.getByText("Fix sqlfluff issue 1625").first()).toBeVisible();
 });
 
 test("数据集、批次和评测详情页展示真实 manifest 字段", async ({ page }) => {

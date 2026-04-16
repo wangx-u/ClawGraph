@@ -476,7 +476,7 @@ Fix:
   and
   [`web/src/components/dashboard/workflow-board.tsx`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/src/components/dashboard/workflow-board.tsx)
   to use friendlier labels such as `请求归属清晰度`,
-  `任务识别清晰度`, `未闭合`, and `可导出数据类型`
+  `任务标签覆盖率`, `决策语义覆盖率`, and `已生成验证资产`
 
 Evidence:
 
@@ -515,3 +515,117 @@ Note:
   `max_members_per_task_instance=1`
 - the second benchmark run was intentionally routed into the holdout/evaluation
   cohort, not dropped
+
+## P2-doc-sync. 文档、手册与浏览器级验证对齐
+
+Status: completed
+
+Work:
+
+- updated
+  [`benchmarks/swebench_lite/README.md`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/benchmarks/swebench_lite/README.md)
+  to cover:
+  - the Dashboard terminal
+  - current KPI wording
+  - local-store review actions
+  - the fact that phase-2 live validation now relies on auto-derived
+    scorecards
+- updated
+  [`web/README.md`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/README.md)
+  to describe:
+  - prod/local-store mode
+  - local write actions
+  - browser regression usage
+- updated
+  [`docs/guides/phase2_final_report.zh-CN.md`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/docs/guides/phase2_final_report.zh-CN.md),
+  [`docs/guides/dashboard_pipeline_rollout.zh-CN.md`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/docs/guides/dashboard_pipeline_rollout.zh-CN.md),
+  and
+  [`docs/design/user_dashboard_prd.zh-CN.md`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/docs/design/user_dashboard_prd.zh-CN.md)
+  so the design narrative matches the shipped product
+- added Playwright browser regression coverage through
+  [`web/playwright.config.ts`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/playwright.config.ts),
+  [`web/e2e/dashboard-regression.spec.ts`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/e2e/dashboard-regression.spec.ts),
+  [`web/scripts/seed_e2e_store.py`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/scripts/seed_e2e_store.py),
+  and
+  [`web/scripts/run_e2e_server.sh`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/scripts/run_e2e_server.sh)
+
+Issues found:
+
+- earlier docs still described Web as mostly read-only and used older KPI text
+- the live validation script still injected fixed scorecard metrics, which no
+  longer matched the automatic phase-2 evaluation loop
+
+Fix:
+
+- rewrote the manuals to present proxy + dashboard + mini benchmark as one
+  coherent user workflow
+- switched
+  [`benchmarks/swebench_lite/run_phase2_live_validation.sh`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/benchmarks/swebench_lite/run_phase2_live_validation.sh)
+  to rely on auto-derived scorecards instead of manual metric injection
+
+Evidence:
+
+- backend validation:
+  `PYTHONPATH=src ./.venv/bin/python -m unittest tests.test_dashboard tests.test_phase2 tests.test_evaluation`
+- web validation:
+  `npm run typecheck`
+  `npm run build`
+  `npm run test:e2e`
+- the browser suite now covers:
+  - overview/access KPI wording
+  - real manifest rendering for dataset/cohort/evaluation details
+  - human review actions inside `/feedback`
+
+## P2-ux. 多任务采集与人类可读展示收敛
+
+Status: completed
+
+Work:
+
+- added named benchmark instance packs in
+  [`benchmarks/swebench_lite/instance_packs.json`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/benchmarks/swebench_lite/instance_packs.json)
+  and
+  [`benchmarks/swebench_lite/resolve_instance_pack.py`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/benchmarks/swebench_lite/resolve_instance_pack.py)
+- updated
+  [`benchmarks/swebench_lite/run_benchmark_collection.sh`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/benchmarks/swebench_lite/run_benchmark_collection.sh)
+  so collection defaults to `INSTANCE_PACK=diverse-lite`
+- extended
+  [`src/clawgraph/dashboard_bundle.py`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/src/clawgraph/dashboard_bundle.py)
+  to emit human-readable run/session titles, repo and instance summaries,
+  step types, and request summaries
+- updated
+  [`web/src/components/dashboard/session-inbox-workspace.tsx`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/src/components/dashboard/session-inbox-workspace.tsx),
+  [`web/src/components/dashboard/workflow-board.tsx`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/src/components/dashboard/workflow-board.tsx),
+  [`web/src/app/sessions/[sessionId]/page.tsx`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/src/app/sessions/[sessionId]/page.tsx),
+  and
+  [`web/src/app/sessions/[sessionId]/runs/[runId]/replay/page.tsx`](/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/web/src/app/sessions/[sessionId]/runs/[runId]/replay/page.tsx)
+  to render those friendlier fields as the primary UI
+
+Issues found:
+
+- the previous collection path only accumulated a narrow set of `sqlfluff`
+  tasks, which was not enough to demonstrate broader task coverage
+- the web product still treated raw `sess_xxx` / `run_xxx` ids and repeated
+  `/chat/completions` paths as primary content, which made the flow hard to
+  understand for non-operators
+
+Fix:
+
+- switched long-running collection to named multi-repo packs so benchmark
+  accumulation defaults to diverse task families
+- moved raw ids and raw endpoint paths into secondary positions
+- promoted task title, repo, instance summary, step type, and request summary
+  into the main information hierarchy
+
+Evidence:
+
+- resolved default diverse pack:
+  `sqlfluff__sqlfluff-1625`, `marshmallow-code__marshmallow-1359`,
+  `pvlib__pvlib-python-1707`, `pylint-dev__astroid-1978`,
+  `pydicom__pydicom-1694`, `pyvista__pyvista-4315`
+- backend validation:
+  `PYTHONPATH=src ./.venv/bin/python -m unittest tests.test_dashboard tests.test_phase2 tests.test_evaluation`
+- web validation:
+  `npm run typecheck`
+  `npm run build`
+  `npm run test:e2e`

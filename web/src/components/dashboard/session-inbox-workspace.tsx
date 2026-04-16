@@ -10,6 +10,7 @@ import {
   outcomeTone,
   reviewStatusLabel,
   reviewStatusTone,
+  shortId,
   workflowStageTone
 } from "@/lib/presenters";
 import { Badge } from "@/components/ui/badge";
@@ -47,9 +48,13 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
 
     const haystack = [
       session.id,
+      session.title,
+      session.summary,
       ...session.userIds,
       ...session.anomalies,
       ...session.runs.map((run) => run.id),
+      ...session.runs.map((run) => run.title),
+      ...session.runs.map((run) => run.summary),
     ]
       .join(" ")
       .toLowerCase();
@@ -81,7 +86,7 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
       <Card
         action={<span className="text-xs text-[color:var(--text-soft)]">共 {filteredSessions.length} 条</span>}
         eyebrow="最近运行"
-        title="按会话查看真实数据"
+        title="按任务查看最近运行"
         strong
       >
         <div className="space-y-4">
@@ -89,7 +94,7 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
             <input
               className="w-full bg-transparent text-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--text-soft)]"
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="按会话、运行、用户或异常关键词搜索"
+              placeholder="按任务、仓库、实例或异常关键词搜索"
               value={query}
             />
           </div>
@@ -132,13 +137,10 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="mono text-xs text-[color:var(--text-soft)]">{session.id}</div>
-                      <div className="mt-2 text-lg font-medium">{session.runs.length} 个运行</div>
+                      <div className="mono text-xs text-[color:var(--text-soft)]">会话 {shortId(session.id)}</div>
+                      <div className="mt-2 text-lg font-medium">{session.title ?? `${session.runs.length} 个运行`}</div>
                       <div className="mt-1 text-sm text-[color:var(--text-muted)]">
-                        {session.requests} 请求 · {session.branches} 分支 · {session.userIds.join(", ")}
-                      </div>
-                      <div className="mt-2 text-sm text-[color:var(--text-muted)]">
-                        下一步：{session.nextAction ?? session.runs[0]?.nextAction ?? "打开会话确认"}
+                        {session.summary ?? `${session.requests} 请求 · ${session.branches} 分支`}
                       </div>
                     </div>
                     <Badge tone={evidenceTone(session.evidenceLevel)}>{evidenceLabel(session.evidenceLevel)}</Badge>
@@ -155,7 +157,7 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
 
       {selectedSession ? (
         <div className="space-y-6">
-          <Card eyebrow="当前会话" title={selectedSession.id} strong>
+          <Card eyebrow="当前会话" title={selectedSession.title ?? shortId(selectedSession.id)} strong>
             <div className="grid gap-3 md:grid-cols-4">
               <div className="tech-highlight rounded-2xl p-4">
                 <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">当前阶段</div>
@@ -210,12 +212,10 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className="mono text-xs text-[color:var(--text-soft)]">{run.id}</div>
+                          <div className="mono text-xs text-[color:var(--text-soft)]">运行 {shortId(run.id)}</div>
+                          <div className="mt-2 font-medium">{run.title ?? run.id}</div>
                           <div className="mt-2 text-sm text-[color:var(--text-muted)]">
-                            {run.requestCount} req · {run.branchCount} 分支 · {run.avgLatency}
-                          </div>
-                          <div className="mt-2 text-sm text-[color:var(--text-muted)]">
-                            {run.nextAction ?? "进入回放查看下一步"}
+                            {run.summary ?? `${run.requestCount} 次请求 · ${run.branchCount} 条分支 · ${run.avgLatency}`}
                           </div>
                         </div>
                         <div className="flex flex-col items-end gap-2">
@@ -238,9 +238,10 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">当前运行</div>
-                      <div className="mt-2 text-2xl font-semibold">{selectedRun.id}</div>
+                      <div className="mt-2 text-2xl font-semibold">{selectedRun.title ?? selectedRun.id}</div>
+                      <div className="mono mt-2 text-xs text-[color:var(--text-soft)]">运行 {shortId(selectedRun.id)}</div>
                       <p className="mt-2 text-sm leading-6 text-[color:var(--text-muted)]">
-                        {selectedRun.stageDetail ?? evidenceDetail(selectedRun.evidenceLevel)}
+                        {selectedRun.summary ?? selectedRun.stageDetail ?? evidenceDetail(selectedRun.evidenceLevel)}
                       </p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
@@ -261,9 +262,9 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                       </div>
                     </div>
                     <div className="rounded-2xl bg-white/70 p-4">
-                      <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">数据准备状态</div>
+                      <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">数据资产状态</div>
                       <div className="mt-3 text-sm text-[color:var(--text-muted)]">
-                        可导出数据类型 {selectedRun.readyBuilders?.length ?? 0} 个 · 判断记录 {selectedRun.artifactCount}
+                        可导出训练格式 {selectedRun.readyBuilders?.length ?? 0} 个 · 判断记录 {selectedRun.artifactCount}
                       </div>
                     </div>
                   </div>

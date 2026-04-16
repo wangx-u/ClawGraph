@@ -3,19 +3,17 @@ import { genericStatusLabel, genericStatusTone } from "@/lib/presenters";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
-import { FilterBar } from "@/components/ui/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 
 export default async function CandidatePoolPage() {
   const {
-    bundle: { candidates, cohorts, slices }
+    bundle: { candidates, cohorts }
   } = await getDashboardBundle();
   const eligibleCount = candidates.filter((item) => item.status === "eligible").length;
   const reviewCount = candidates.filter((item) => item.status === "review").length;
   const holdoutCount = candidates.filter((item) => item.status === "holdout").length;
   const cohortHref = cohorts[0] ? `/curation/cohorts/${cohorts[0].id}` : "/datasets";
-  const primarySlice = slices[0];
 
   return (
     <div className="space-y-6">
@@ -24,15 +22,6 @@ export default async function CandidatePoolPage() {
         description="围绕切片复查候选运行、处理低置信样本，并决定哪些数据可以进入下一版冻结批次。"
         primaryAction={<Button href={cohortHref} variant="primary">查看冻结结果</Button>}
         secondaryAction={<Button href="/datasets" variant="secondary">打开导出流</Button>}
-      />
-      <FilterBar
-        filters={[
-          `当前切片：${primarySlice?.id ?? "全部"}`,
-          "质量阈值：动态",
-          "Verifier 阈值：动态",
-          "来源：全部",
-          "时间：最近 30 天"
-        ]}
       />
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
@@ -49,7 +38,7 @@ export default async function CandidatePoolPage() {
             {(candidates
               .filter((candidate) => candidate.status !== "eligible")
               .slice(0, 5)
-              .map((candidate) => `${candidate.runId} · ${genericStatusLabel(candidate.status)}`) || []
+              .map((candidate) => `${candidate.runTitle ?? candidate.runId} · ${genericStatusLabel(candidate.status)}`) || []
             ).map((reason) => (
               <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={reason}>
                 {reason}
@@ -63,7 +52,10 @@ export default async function CandidatePoolPage() {
         <DataTable
           headers={["Run", "Task Instance", "Template Hash", "质量", "Verifier", "来源", "Cluster", "状态"]}
           rows={candidates.map((candidate) => [
-            <span className="mono text-xs text-[color:var(--text-soft)]" key={`${candidate.runId}-id`}>{candidate.runId}</span>,
+            <div key={`${candidate.runId}-id`}>
+              <div className="font-medium">{candidate.runTitle ?? candidate.runId}</div>
+              <div className="mono text-xs text-[color:var(--text-soft)]">{candidate.runId}</div>
+            </div>,
             candidate.taskInstanceKey,
             candidate.templateHash,
             candidate.quality.toFixed(2),

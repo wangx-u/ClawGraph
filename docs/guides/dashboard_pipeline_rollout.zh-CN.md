@@ -11,6 +11,25 @@
 - 继续复用 ClawGraph 现有一等对象：`fact -> semantic event / artifact -> slice -> cohort -> dataset_snapshot / eval_suite`。
 - 新能力优先落在 read model、worker、脚本或文档，不改写事实层。
 
+## 当前实现对齐（2026-04）
+
+这份 rollout 文档最初是实施计划。到当前版本，以下内容已经落地并应作为现状理解：
+
+- 统一的 dashboard read model 已在 CLI、web bundle 和页面中共用
+- 顶层 KPI 已统一为：
+  `请求归属清晰度 / 任务标签覆盖率 / 决策语义覆盖率 / 已生成验证资产`
+- 数据集、cohort、evaluation 详情页只展示真实 manifest 字段，不再填充演示值
+- `local-store` 模式下，Web 侧可以直接执行人工复核闭环：
+  `人工确认并入池 / 标记已人工确认 / 关闭当前事项`
+- phase 2 已能从通用 `score` artifact 自动推导 scorecard 和 promotion
+- 浏览器级回归已覆盖首页、接入页、manifest 详情页和人工复核关键路径
+- benchmark collection 默认已切到 named instance pack，适合跨 repo、
+  多任务类型的长期沉淀
+- Web 已将 raw id 和原始接口路径降级为次要信息，主展示改为任务标题、
+  仓库摘要和步骤类型
+
+因此，下文的阶段划分应理解为“设计与实现如何对应”，而不是“这些能力都还未开始”。
+
 ## 阶段 1：数据与 Dashboard 打通
 
 ### 目标

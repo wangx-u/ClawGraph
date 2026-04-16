@@ -10,7 +10,8 @@ STORE_URI="${STORE_URI:-sqlite:////${STORE_PATH#/}}"
 PAYLOAD_DIR="${PAYLOAD_DIR:-/tmp/${STORE_BASENAME}-payloads}"
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp/${STORE_BASENAME}-out}"
 PREP_ROOT="${PREP_ROOT:-/tmp/clawgraph-swebench}"
-INSTANCE_IDS="${INSTANCE_IDS:-sqlfluff__sqlfluff-1625,sqlfluff__sqlfluff-2419}"
+INSTANCE_PACK="${INSTANCE_PACK:-diverse-lite}"
+INSTANCE_IDS="${INSTANCE_IDS:-}"
 PROXY_PORT="${PROXY_PORT:-8092}"
 PROXY_BASE="${PROXY_BASE:-http://127.0.0.1:${PROXY_PORT}}"
 START_PROXY="${START_PROXY:-1}"
@@ -59,6 +60,11 @@ configure_dataset_access() {
 
 configure_dataset_access
 echo "Dataset access mode: ${CLAWGRAPH_BENCHMARK_DATASET_MODE}"
+
+if [[ -z "$INSTANCE_IDS" ]]; then
+  INSTANCE_IDS="$("$PYTHON_BIN" benchmarks/swebench_lite/resolve_instance_pack.py --pack "$INSTANCE_PACK")"
+fi
+echo "Benchmark instances: ${INSTANCE_IDS}"
 
 wait_for_proxy() {
   local attempt
@@ -172,6 +178,7 @@ run_python -m clawgraph.cli.main inspect dashboard \
   --json >"$OUTPUT_DIR/dashboard.before.json"
 
 IFS=',' read -r -a instance_array <<<"$INSTANCE_IDS"
+INSTANCE_COUNT="${#instance_array[@]}"
 index=0
 first_session=""
 first_run=""
@@ -246,7 +253,7 @@ run_python -m clawgraph.cli.main inspect dashboard \
   --run-limit 32 \
   --artifact-limit 80 >"$OUTPUT_DIR/dashboard.bundle.json"
 
-run_python - "$STORE_URI" "$OUTPUT_DIR" "${CLAWGRAPH_BENCHMARK_DATASET_MODE}" <<'PY'
+run_python - "$STORE_URI" "$OUTPUT_DIR" "${CLAWGRAPH_BENCHMARK_DATASET_MODE}" "$INSTANCE_PACK" "$INSTANCE_IDS" "$INSTANCE_COUNT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -254,6 +261,9 @@ from pathlib import Path
 store_uri = sys.argv[1]
 out_dir = Path(sys.argv[2])
 dataset_access_mode = sys.argv[3]
+instance_pack = sys.argv[4]
+instance_ids = [item.strip() for item in sys.argv[5].split(",") if item.strip()]
+instance_count = sys.argv[6]
 final_slice = json.loads((out_dir / "final.slice.json").read_text(encoding="utf-8"))
 dashboard = json.loads((out_dir / "dashboard.after.json").read_text(encoding="utf-8"))
 lines = [
@@ -261,6 +271,9 @@ lines = [
     "",
     f"- store: `{store_uri}`",
     f"- dataset_access_mode: `{dataset_access_mode}`",
+    f"- instance_pack: `{instance_pack}`",
+    f"- instance_count: `{instance_count}`",
+    f"- instances: `{', '.join(instance_ids)}`",
     f"- slice: `{final_slice['slice']['record']['slice_id']}`",
     f"- training cohort: `{final_slice['training_cohort']['cohort_id']}`",
     f"- snapshots: `{dashboard['overview']['dataset_snapshots']}`",

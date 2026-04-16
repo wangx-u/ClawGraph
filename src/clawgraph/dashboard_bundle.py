@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+import re
 from typing import Any
 
 from clawgraph.curation import list_slice_candidates
@@ -68,6 +69,8 @@ def build_web_dashboard_bundle(
     sessions_payload: list[dict[str, Any]] = []
     replay_payload: list[dict[str, Any]] = []
     recent_artifact_map: dict[str, dict[str, Any]] = {}
+    run_display_map: dict[str, dict[str, Any]] = {}
+    session_display_map: dict[str, dict[str, Any]] = {}
     readiness_accumulator: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"ready_runs": 0, "predicted_records": 0, "blockers": set()}
     )
@@ -78,7 +81,7 @@ def build_web_dashboard_bundle(
         if not facts:
             continue
         artifacts = resolved_store.list_artifacts(session_id=session_id, latest_only=True)
-        session_summary = build_session_inspect_summary(facts, artifacts)
+        session_inspect = build_session_inspect_summary(facts, artifacts)
         run_ids = list(resolved_store.iter_runs(session_id=session_id))
         run_payloads: list[dict[str, Any]] = []
         session_anomalies: list[str] = []
@@ -101,9 +104,15 @@ def build_web_dashboard_bundle(
                 run_id=run_id,
                 latest_only=True,
             )
+            annotation_payload = active_run_annotation_payload(run_artifacts)
             request_summaries = build_request_span_summaries(run_facts, run_artifacts)
             branch_summaries = build_branch_inspect_summaries(run_facts, run_artifacts)
             readiness_summary = build_dataset_readiness_summary(run_facts, run_artifacts)
+            request_fact_map = {
+                fact.request_id: fact
+                for fact in run_facts
+                if fact.kind == "request_started" and isinstance(fact.request_id, str)
+            }
             declared_count = sum(1 for branch in branch_summaries if branch.source == "declared")
             declared_ratio = declared_count / len(branch_summaries) if branch_summaries else 1.0
             run_row = run_rows_by_id.get(run_id)
@@ -113,8 +122,38 @@ def build_web_dashboard_bundle(
             if workflow_row is None:
                 raise ValueError(f"dashboard snapshot missing workflow row: {run_id}")
 
+            run_title = describe_run_title(
+                task_family=run_row.task_family,
+                task_type=run_row.task_type,
+                task_instance_key=run_row.task_instance_key,
+                annotation_payload=annotation_payload,
+            )
+            run_summary = describe_run_summary(
+                task_family=run_row.task_family,
+                task_type=run_row.task_type,
+                task_instance_key=run_row.task_instance_key,
+                annotation_payload=annotation_payload,
+            )
+            task_instance_key = (
+                run_row.task_instance_key
+                if isinstance(run_row.task_instance_key, str)
+                else annotation_payload.get("task_instance_key")
+                if isinstance(annotation_payload.get("task_instance_key"), str)
+                else None
+            )
+            task_instance_name = describe_task_instance(
+                task_instance_key=task_instance_key,
+                annotation_payload=annotation_payload,
+            )
+
             run_payload = {
                 "id": run_id,
+                "title": run_title,
+                "summary": run_summary,
+                "taskLabel": task_label(run_row.task_family, run_row.task_type),
+                "taskInstanceKey": task_instance_key,
+                "taskInstanceLabel": task_instance_name,
+                "repo": annotation_payload.get("repo") if isinstance(annotation_payload.get("repo"), str) else None,
                 "requestCount": run_row.request_count,
                 "successCount": run_row.success_count,
                 "failureCount": run_row.failure_count,
@@ -141,11 +180,17 @@ def build_web_dashboard_bundle(
                 "reviewStatus": workflow_row.review_status,
                 "reviewReasons": list(workflow_row.review_reasons[:3]),
             }
+            run_display_map[run_id] = {
+                "title": run_title,
+                "summary": run_summary,
+                "taskInstanceLabel": task_instance_name,
+                "taskLabel": task_label(run_row.task_family, run_row.task_type),
+            }
             run_payloads.append(run_payload)
             all_runs.append(run_payload)
             session_anomalies.extend(
                 run_anomalies(
-                    run_id=run_id,
+                    run_title=run_title,
                     run_row=run_row,
                     declared_ratio=declared_ratio,
                     request_summaries=request_summaries,
@@ -164,19 +209,31 @@ def build_web_dashboard_bundle(
                 for blocker in run_row.readiness_blockers.get(builder_name, []):
                     readiness_accumulator[builder_name]["blockers"].add(blocker)
 
+            timeline_steps = [fact_timeline_step(fact) for fact in run_facts[:18]]
             replay_payload.append(
                 {
                     "sessionId": session_id,
                     "runId": run_id,
+                    "title": run_title,
+                    "summary": run_summary,
                     "outcome": run_payload["outcome"],
-                    "timeline": [fact_timeline_line(fact) for fact in run_facts[:18]],
+                    "timeline": [step["label"] for step in timeline_steps],
+                    "timelineSteps": timeline_steps,
                     "branches": [
                         {
                             "id": branch.branch_id,
+                            "title": describe_branch_title(branch.branch_type, branch.source),
+                            "summary": describe_branch_summary(
+                                branch_type=branch.branch_type,
+                                source=branch.source,
+                                request_ids=branch.request_ids,
+                                parent_id=branch.parent_branch_id,
+                            ),
                             "type": branch.branch_type,
                             "status": branch.status,
                             "source": branch.source,
                             "parentId": branch.parent_branch_id,
+                            "requestCount": len(branch.request_ids),
                             "requestIds": branch.request_ids,
                         }
                         for branch in branch_summaries
@@ -186,6 +243,12 @@ def build_web_dashboard_bundle(
                             "id": summary.request_id,
                             "actor": safe_actor(summary.actor),
                             "path": summary.path,
+                            "pathLabel": endpoint_label(summary.path, safe_actor(summary.actor)),
+                            "stepType": endpoint_step_type(summary.path, safe_actor(summary.actor)),
+                            "summary": describe_request_summary(
+                                request_summary=summary,
+                                request_fact=request_fact_map.get(summary.request_id),
+                            ),
                             "outcome": summary.outcome,
                             "status": summary.status_code or (102 if summary.outcome == "open" else 0),
                             "latency": format_latency(summary.total_latency_ms),
@@ -197,13 +260,25 @@ def build_web_dashboard_bundle(
             )
 
         session_row = session_rows_by_id.get(session_id)
+        session_title = describe_session_title(session_id=session_id, run_payloads=run_payloads)
+        session_summary = describe_session_summary(
+            run_count=len(run_payloads),
+            request_count=session_inspect.request_count,
+            branch_count=session_inspect.branch_count,
+        )
+        session_display_map[session_id] = {
+            "title": session_title,
+            "summary": session_summary,
+        }
         sessions_payload.append(
             {
                 "id": session_id,
-                "userIds": session_summary.user_ids,
+                "title": session_title,
+                "summary": session_summary,
+                "userIds": session_inspect.user_ids,
                 "runs": run_payloads,
-                "requests": session_summary.request_count,
-                "branches": session_summary.branch_count,
+                "requests": session_inspect.request_count,
+                "branches": session_inspect.branch_count,
                 "evidenceLevel": session_row.evidence_level if session_row is not None else "E0",
                 "anomalies": list(dict.fromkeys(session_anomalies))[:4],
                 "nextAction": run_payloads[0]["nextAction"] if run_payloads else "等待第一条运行进入系统",
@@ -285,6 +360,7 @@ def build_web_dashboard_bundle(
             candidate_payloads.append(
                 {
                     "runId": candidate.run_id,
+                    "runTitle": run_display_map.get(candidate.run_id, {}).get("title"),
                     "taskInstanceKey": candidate.task_instance_key,
                     "templateHash": candidate.task_template_hash,
                     "quality": round(candidate.quality_confidence, 4),
@@ -486,7 +562,8 @@ def build_web_dashboard_bundle(
                 "source": item.source,
                 "targetRef": item.target_ref,
                 "targetLabel": (
-                    run_label(run_row.task_family, run_row.task_type, run_id)
+                    run_display_map.get(run_id, {}).get("title")
+                    or run_label(run_row.task_family, run_row.task_type, run_id)
                     if run_row is not None
                     else item.target_ref
                 ),
@@ -524,6 +601,9 @@ def build_web_dashboard_bundle(
         {
             "sessionId": row.session_id,
             "runId": row.run_id,
+            "title": run_display_map.get(row.run_id, {}).get("title"),
+            "summary": run_display_map.get(row.run_id, {}).get("summary"),
+            "sessionTitle": session_display_map.get(row.session_id, {}).get("title"),
             "latestTimestamp": row.latest_timestamp,
             "evidenceLevel": row.evidence_level,
             "stage": row.stage,
@@ -784,6 +864,8 @@ def build_web_dashboard_bundle(
         "evaluationAssetCount": evaluation_asset_count,
         "latestActivity": format_datetime(latest_activity),
         "latestSessionId": sessions_payload[0]["id"] if sessions_payload else "-",
+        "latestSessionTitle": sessions_payload[0].get("title") if sessions_payload else "-",
+        "latestRunTitle": all_runs[0].get("title") if all_runs else "-",
     }
 
     return {
@@ -847,30 +929,26 @@ def format_metric(metrics: dict[str, Any], *names: str) -> str:
 
 def run_anomalies(
     *,
-    run_id: str,
+    run_title: str,
     run_row: DashboardRunRow,
     declared_ratio: float,
     request_summaries: list[Any],
 ) -> list[str]:
     anomalies: list[str] = []
     if any(summary.outcome == "open" for summary in request_summaries):
-        anomalies.append(f"{run_id} 存在 open span")
+        anomalies.append(f"{run_title} 还有未闭合的请求")
     if run_row.task_instance_key is None:
-        anomalies.append(f"{run_id} 缺少 task_instance_key")
+        anomalies.append(f"{run_title} 还缺少稳定的任务实例标识")
     if declared_ratio < 0.5:
-        anomalies.append(f"{run_id} 的 declared branch 覆盖率偏低")
+        anomalies.append(f"{run_title} 的关键分支仍主要依赖自动恢复")
     return anomalies
 
 
 def fact_timeline_line(fact: Any) -> str:
-    if fact.kind == "semantic_event":
-        semantic_kind = fact.payload.get("semantic_kind")
-        if isinstance(semantic_kind, str) and semantic_kind:
-            return semantic_kind
-    path = fact.payload.get("path")
-    if isinstance(path, str) and path:
-        return f"{fact.kind} · {path}"
-    return fact.kind
+    step = fact_timeline_step(fact)
+    if step.get("detail"):
+        return f"{step['label']} · {step['detail']}"
+    return step["label"]
 
 
 def complexity_for_sample_unit(sample_unit: str) -> str:
@@ -957,6 +1035,261 @@ def task_label(task_family: str | None, task_type: str | None) -> str:
 def run_label(task_family: str | None, task_type: str | None, run_id: str | None) -> str:
     task_name = task_label(task_family, task_type)
     return task_name if run_id is None else f"{task_name} · {run_id}"
+
+
+def active_run_annotation_payload(artifacts: list[Any]) -> dict[str, Any]:
+    for artifact in artifacts:
+        if artifact.status != "active":
+            continue
+        if artifact.artifact_type != "annotation":
+            continue
+        payload = artifact.payload if isinstance(artifact.payload, dict) else None
+        if payload is None:
+            continue
+        if payload.get("annotation_kind") != "e1":
+            continue
+        return payload
+    return {}
+
+
+def describe_task_instance(
+    *,
+    task_instance_key: str | None,
+    annotation_payload: dict[str, Any] | None = None,
+) -> str | None:
+    if not isinstance(task_instance_key, str) or not task_instance_key:
+        return None
+    repo = repo_name(task_instance_key=task_instance_key, annotation_payload=annotation_payload)
+    issue = issue_number(task_instance_key)
+    if repo and issue:
+        return f"{repo} #{issue}"
+    if repo:
+        return repo
+    return task_instance_key
+
+
+def describe_run_title(
+    *,
+    task_family: str | None,
+    task_type: str | None,
+    task_instance_key: str | None,
+    annotation_payload: dict[str, Any] | None = None,
+) -> str:
+    instance_label = describe_task_instance(
+        task_instance_key=task_instance_key,
+        annotation_payload=annotation_payload,
+    )
+    if instance_label:
+        return instance_label
+    return task_label(task_family, task_type)
+
+
+def describe_run_summary(
+    *,
+    task_family: str | None,
+    task_type: str | None,
+    task_instance_key: str | None,
+    annotation_payload: dict[str, Any] | None = None,
+) -> str:
+    task_name = task_label(task_family, task_type)
+    repo = repo_name(task_instance_key=task_instance_key, annotation_payload=annotation_payload)
+    if repo and task_instance_key:
+        return f"{task_name} · 仓库 {repo} · 实例 {task_instance_key}"
+    if task_instance_key:
+        return f"{task_name} · 实例 {task_instance_key}"
+    if repo:
+        return f"{task_name} · 仓库 {repo}"
+    return task_name
+
+
+def describe_session_title(session_id: str, run_payloads: list[dict[str, Any]]) -> str:
+    if not run_payloads:
+        return humanize_identifier(session_id)
+    primary = run_payloads[0].get("title")
+    if isinstance(primary, str) and primary:
+        if len(run_payloads) == 1:
+            return primary
+        return f"{primary} 等 {len(run_payloads)} 个运行"
+    return humanize_identifier(session_id)
+
+
+def describe_session_summary(*, run_count: int, request_count: int, branch_count: int) -> str:
+    return f"{run_count} 个运行 · {request_count} 次请求 · {branch_count} 条分支"
+
+
+def describe_branch_title(branch_type: str, source: str) -> str:
+    branch_name = humanize_identifier(branch_type or "branch")
+    source_label = "显式记录" if source == "declared" else "自动恢复"
+    return f"{branch_name} · {source_label}"
+
+
+def describe_branch_summary(
+    *,
+    branch_type: str,
+    source: str,
+    request_ids: list[str],
+    parent_id: str | None,
+) -> str:
+    request_count = len(request_ids)
+    parts = [
+        "来自模型显式声明" if source == "declared" else "由执行轨迹自动恢复",
+        f"覆盖 {request_count} 个请求步骤",
+    ]
+    if isinstance(parent_id, str) and parent_id:
+        parts.append("与上游分支保持衔接")
+    return " · ".join(parts)
+
+
+def endpoint_step_type(path: str | None, actor: str) -> str:
+    if actor == "model":
+        return "模型推理"
+    if actor == "tool":
+        return "工具调用"
+    if isinstance(path, str) and "semantic" in path:
+        return "语义事件"
+    return "运行时处理"
+
+
+def endpoint_label(path: str | None, actor: str) -> str:
+    if actor == "model":
+        normalized = (path or "").rstrip("/")
+        if normalized.endswith("/chat/completions") or normalized == "/chat/completions":
+            return "对话推理"
+        if normalized.endswith("/responses") or normalized == "/responses":
+            return "响应生成"
+        return "模型调用"
+    if actor == "tool":
+        return "工具调用"
+    if isinstance(path, str) and "semantic" in path:
+        return "语义事件"
+    return humanize_identifier((path or "runtime").strip("/")) or "运行时"
+
+
+def describe_request_summary(*, request_summary: Any, request_fact: Any | None) -> str:
+    preview = request_preview(request_fact)
+    if preview:
+        return preview
+    label = endpoint_label(getattr(request_summary, "path", None), safe_actor(getattr(request_summary, "actor", None)))
+    outcome = getattr(request_summary, "outcome", None)
+    if outcome == "failed":
+        return f"{label}失败"
+    if outcome == "open":
+        return f"{label}仍在进行中"
+    return f"{label}已完成"
+
+
+def request_preview(request_fact: Any | None) -> str | None:
+    if request_fact is None:
+        return None
+    payload_json = request_fact.payload.get("json")
+    if isinstance(payload_json, dict):
+        messages = payload_json.get("messages")
+        if isinstance(messages, list):
+            for message in reversed(messages):
+                preview = message_preview(message)
+                if preview:
+                    return preview
+        input_value = payload_json.get("input")
+        if isinstance(input_value, str) and input_value.strip():
+            return shorten_text(input_value)
+    return None
+
+
+def message_preview(message: Any) -> str | None:
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return shorten_text(content)
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        if parts:
+            return shorten_text(" ".join(parts))
+    return None
+
+
+def shorten_text(value: str, limit: int = 72) -> str:
+    collapsed = " ".join(value.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: limit - 1]}…"
+
+
+def repo_name(*, task_instance_key: str | None, annotation_payload: dict[str, Any] | None = None) -> str | None:
+    if isinstance(annotation_payload, dict):
+        repo = annotation_payload.get("repo")
+        if isinstance(repo, str) and repo:
+            return repo
+    if isinstance(task_instance_key, str) and "__" in task_instance_key:
+        return task_instance_key.split("__", 1)[0]
+    return None
+
+
+def issue_number(task_instance_key: str | None) -> str | None:
+    if not isinstance(task_instance_key, str) or not task_instance_key:
+        return None
+    suffix = task_instance_key.split("__", 1)[-1]
+    match = re.search(r"-(\d+)$", suffix)
+    return match.group(1) if match else None
+
+
+def fact_timeline_step(fact: Any) -> dict[str, str]:
+    if fact.kind == "semantic_event":
+        semantic_kind = fact.payload.get("semantic_kind")
+        return {
+            "label": semantic_event_label(semantic_kind if isinstance(semantic_kind, str) else None),
+            "detail": "系统记录了一个关键决策节点",
+        }
+    path = fact.payload.get("path") if isinstance(fact.payload, dict) else None
+    actor = safe_actor(getattr(fact, "actor", None))
+    endpoint = endpoint_label(path if isinstance(path, str) else None, actor)
+    preview = request_preview(fact if fact.kind == "request_started" else None)
+    if fact.kind == "request_started":
+        return {
+            "label": f"{endpoint}开始",
+            "detail": preview or "已发起一次新的步骤",
+        }
+    if fact.kind == "response_finished":
+        return {
+            "label": f"{endpoint}完成",
+            "detail": response_detail(fact),
+        }
+    if fact.kind == "response_chunk":
+        return {"label": f"{endpoint}流式返回", "detail": "正在持续返回结果"}
+    return {
+        "label": humanize_identifier(fact.kind),
+        "detail": endpoint if endpoint else "执行事件",
+    }
+
+
+def response_detail(fact: Any) -> str:
+    if not isinstance(fact.payload, dict):
+        return "步骤已完成"
+    status_code = fact.payload.get("status_code")
+    if isinstance(status_code, int):
+        return f"状态码 {status_code}"
+    return "步骤已完成"
+
+
+def semantic_event_label(semantic_kind: str | None) -> str:
+    mapping = {
+        "task_completed": "任务完成",
+        "route_decided": "路由已决定",
+        "retry_declared": "开始重试",
+        "fallback_declared": "触发回退",
+        "branch_opened": "分支已打开",
+        "branch_closed": "分支已关闭",
+    }
+    if semantic_kind in mapping:
+        return mapping[semantic_kind]
+    if isinstance(semantic_kind, str) and semantic_kind:
+        return humanize_identifier(semantic_kind)
+    return "语义事件"
 
 
 def build_snapshot_title(*, builder: str, cohort_name: str | None) -> str:

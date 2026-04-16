@@ -1,5 +1,5 @@
 import { getDashboardBundle } from "@/lib/data-source";
-import { evidenceTone } from "@/lib/presenters";
+import { evidenceLabel, evidenceTone, shortId } from "@/lib/presenters";
 import { formatPercent } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,8 +33,8 @@ export default async function SessionDetailPage({
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`会话 ${session.id}`}
-        description="从会话维度审查证据健康度、运行质量和异常项，再判断它是否适合进入回放、监督或策展流程。"
+        title={session.title ?? `会话 ${shortId(session.id)}`}
+        description="从会话维度看清这批真实运行做了什么、当前卡在哪一步，以及是否已经能进入训练或验证。"
         primaryAction={<Button href={`/sessions/${session.id}/runs/${session.runs[0].id}/replay`} variant="primary">打开回放</Button>}
         secondaryAction={<Button href="/supervision" variant="secondary">进入监督</Button>}
       />
@@ -42,38 +42,47 @@ export default async function SessionDetailPage({
       <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <Card eyebrow="会话摘要" title="证据状态" strong>
           <div className="grid gap-3 md:grid-cols-4">
-            <div className="tech-highlight rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">证据等级</div><div className="mt-3 text-2xl font-semibold">{session.evidenceLevel}</div></div>
+            <div className="tech-highlight rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">证据等级</div><div className="mt-3 text-2xl font-semibold">{evidenceLabel(session.evidenceLevel)}</div></div>
             <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">运行数</div><div className="mt-3 text-2xl font-semibold">{session.runs.length}</div></div>
             <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">请求数</div><div className="mt-3 text-2xl font-semibold">{session.requests}</div></div>
             <div className="panel-soft rounded-2xl p-4"><div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">分支数</div><div className="mt-3 text-2xl font-semibold">{session.branches}</div></div>
+          </div>
+          <div className="mt-4 text-sm text-[color:var(--text-muted)]">
+            {session.summary ?? `${session.requests} 次请求，${session.branches} 条分支。`}
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
             {session.userIds.map((userId) => (
               <Badge key={userId} tone="info">{userId}</Badge>
             ))}
+            <Badge tone="neutral">会话 {shortId(session.id)}</Badge>
           </div>
         </Card>
 
-        <Card eyebrow="建议动作" title="当前最优下一步">
+        <Card eyebrow="当前阻塞与下一步" title={session.nextAction ?? "先打开最近运行"} >
           <div className="space-y-3">
-            {[
-              "在冻结任何 cohort 之前，先回看最近失败的 run。",
-              "对于仍处于 E0 或 E1 的运行，优先执行 openclaw-defaults。",
-              "进入策展前，先补齐 task_instance_key 与核心语义事件。"
-            ].map((item) => (
-              <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={item}>
-                {item}
+            <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+              {session.nextAction ?? "先从最近一次运行开始，确认它处在采集、数据准备、复核还是导出阶段。"}
+            </div>
+            {session.anomalies.length ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+                当前最明显的问题：{session.anomalies[0]}
               </div>
-            ))}
+            ) : null}
           </div>
         </Card>
       </div>
 
-      <Card eyebrow="运行清单" title="Run 质量表">
+      <Card eyebrow="运行清单" title="当前会话的运行状态">
         <DataTable
-          headers={["Run", "请求", "成功", "失败", "Open", "分支", "Declared", "Artifacts", "证据", "动作"]}
+          headers={["任务运行", "请求", "成功", "失败", "进行中", "分支", "显式覆盖", "判断记录", "状态", "操作"]}
           rows={session.runs.map((run) => [
-            <span className="mono text-xs text-[color:var(--text-soft)]" key={`${run.id}-id`}>{run.id}</span>,
+            <div key={`${run.id}-id`}>
+              <div className="font-medium">{run.title ?? run.id}</div>
+              {run.summary ? (
+                <div className="mt-1 text-sm text-[color:var(--text-muted)]">{run.summary}</div>
+              ) : null}
+              <div className="mono text-xs text-[color:var(--text-soft)]">运行 {shortId(run.id)}</div>
+            </div>,
             run.requestCount,
             run.successCount,
             run.failureCount,
@@ -81,8 +90,11 @@ export default async function SessionDetailPage({
             run.branchCount,
             formatPercent(run.declaredRatio),
             run.artifactCount,
-            <Badge key={`${run.id}-badge`} tone={evidenceTone(run.evidenceLevel)}>{run.evidenceLevel}</Badge>,
-            <Button className="w-full" href={`/sessions/${session.id}/runs/${run.id}/replay`} key={`${run.id}-action`} variant="secondary">回放</Button>
+            <div className="flex flex-wrap gap-2" key={`${run.id}-badge`}>
+              <Badge tone={evidenceTone(run.evidenceLevel)}>{evidenceLabel(run.evidenceLevel)}</Badge>
+              {run.stageLabel ? <Badge tone="info">{run.stageLabel}</Badge> : null}
+            </div>,
+            <Button className="w-full" href={`/sessions/${session.id}/runs/${run.id}/replay`} key={`${run.id}-action`} variant="secondary">进入回放</Button>
           ])}
         />
       </Card>

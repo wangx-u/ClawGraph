@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getDashboardBundle } from "@/lib/data-source";
 import { guidedFlows } from "@/lib/navigation";
+import { shortId } from "@/lib/presenters";
 import { FlowSteps } from "@/components/dashboard/flow-steps";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { WorkflowBoard } from "@/components/dashboard/workflow-board";
@@ -22,6 +23,9 @@ export default async function OverviewPage() {
     },
     meta
   } = await getDashboardBundle();
+  const latestSessionLabel =
+    ingestSummary?.latestSessionTitle ?? ingestSummary?.latestRunTitle ?? ingestSummary?.latestSessionId ?? "-";
+  const latestSessionId = ingestSummary?.latestSessionId ?? "-";
 
   return (
     <div className="space-y-6">
@@ -37,9 +41,6 @@ export default async function OverviewPage() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <div className="text-sm text-[color:var(--text-muted)]">{meta.statusText}</div>
-              <div className="mt-2 mono text-xs text-[color:var(--text-soft)]">
-                mode={meta.configuredMode} · resolved={meta.resolvedMode}
-              </div>
             </div>
             <Badge tone={meta.status === "prod" ? "success" : meta.status === "prod-fallback" ? "warning" : "info"}>
               {meta.status}
@@ -51,8 +52,11 @@ export default async function OverviewPage() {
               <div className="mt-3 text-lg font-semibold">{ingestSummary?.latestActivity ?? "-"}</div>
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
-              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">最新会话</div>
-              <div className="mt-3 text-lg font-semibold">{ingestSummary?.latestSessionId ?? "-"}</div>
+              <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">最近任务</div>
+              <div className="mt-3 text-lg font-semibold">{latestSessionLabel}</div>
+              {latestSessionLabel !== latestSessionId ? (
+                <div className="mt-2 mono text-xs text-[color:var(--text-soft)]">会话 {shortId(latestSessionId)}</div>
+              ) : null}
             </div>
             <div className="panel-soft rounded-[1.1rem] p-4">
               <div className="text-xs tracking-[0.16em] text-[color:var(--text-soft)]">最近请求</div>

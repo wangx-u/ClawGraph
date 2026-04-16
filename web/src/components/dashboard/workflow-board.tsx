@@ -1,7 +1,7 @@
 "use client";
 
 import type { WorkflowLane, WorkflowRun } from "@/lib/types";
-import { reviewStatusLabel, reviewStatusTone, workflowStageTone } from "@/lib/presenters";
+import { reviewStatusLabel, reviewStatusTone, shortId, workflowStageTone } from "@/lib/presenters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -38,13 +38,14 @@ export function WorkflowBoard({ lanes, runs }: WorkflowBoardProps) {
               <div className="panel-soft rounded-[1.15rem] p-4" key={run.runId}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="mono text-xs text-[color:var(--text-soft)]">
-                      {run.sessionId} / {run.runId}
+                    <div className="text-xs text-[color:var(--text-soft)]">
+                      {run.sessionTitle ?? `会话 ${shortId(run.sessionId)}`}
                     </div>
-                    <div className="mt-2 text-base font-medium">{run.stageLabel}</div>
+                    <div className="mt-2 text-base font-medium">{run.title ?? run.stageLabel}</div>
                     <p className="mt-2 text-sm leading-6 text-[color:var(--text-muted)]">
-                      {run.stageDetail}
+                      {run.summary ?? run.stageDetail}
                     </p>
+                    <div className="mono mt-2 text-xs text-[color:var(--text-soft)]">运行 {shortId(run.runId)}</div>
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
                     <Badge tone={workflowStageTone(run.stage)}>{run.stageLabel}</Badge>

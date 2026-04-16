@@ -69,6 +69,9 @@ The script stays on the generic path:
 - it starts or reuses a ClawGraph proxy
 - it sends real OpenAI-compatible requests through the proxy
 - it runs `clawgraph phase2 run`
+- it lets phase 2 derive scorecard and promotion from the generic `score`
+  artifacts already attached to the run, instead of hand-wiring benchmark-only
+  evaluation logic
 - it lets `mini-SWE-agent` generate live benchmark traffic through the same
   proxy
 - it captures dashboard snapshots and the web bundle JSON that the UI consumes
@@ -105,7 +108,7 @@ START_PROXY=0 \
 PROXY_BASE=http://127.0.0.1:8092 \
 STORE_URI=sqlite:////tmp/clawgraph-benchmark-collection.db \
 OUTPUT_DIR=/tmp/clawgraph-benchmark-collection-out \
-INSTANCE_IDS=sqlfluff__sqlfluff-1625,sqlfluff__sqlfluff-2419 \
+INSTANCE_PACK=diverse-lite \
 bash benchmarks/swebench_lite/run_benchmark_collection.sh
 ```
 
@@ -117,6 +120,23 @@ This helper:
 - enriches completed runs through the generic artifact API
 - runs `clawgraph phase2 run` for each run and again at slice scope
 - exports dashboard snapshots and the same bundle consumed by the web UI
+
+By default the collector now resolves a named instance pack instead of requiring
+you to hand-maintain a comma-separated task list. The built-in packs are:
+
+- `smoke`: one known-good issue for quick ingress checks
+- `diverse-lite`: one issue from each cached repo family, suitable for product
+  demos and pipeline validation
+- `balanced-lite`: a slightly larger cross-repo set for longer accumulation
+- `all-lite-dev`: the full cached `SWE-bench Lite` dev split
+
+You can inspect the resolved pack before a run:
+
+```bash
+./.venv/bin/python benchmarks/swebench_lite/resolve_instance_pack.py \
+  --pack diverse-lite \
+  --format lines
+```
 
 Typical outputs in `OUTPUT_DIR`:
 
@@ -131,6 +151,53 @@ Typical outputs in `OUTPUT_DIR`:
 The collector now auto-detects a cached local `SWE-Bench Lite` dataset and
 switches to offline-cache mode when possible. That avoids long startup delays
 caused by remote HuggingFace metadata probes during repeated validation runs.
+
+## 1.3 Dashboard 联调与人工复核
+
+如果你要按“用户视角”一起验证 proxy、agent 和 Dashboard，建议把 Web 页面也接到同一个
+store：
+
+```bash
+cd clawgraph/web
+NEXT_PUBLIC_DATA_MODE=prod \
+CLAWGRAPH_STORE_URI=sqlite:////tmp/clawgraph-benchmark-collection.db \
+CLAWGRAPH_PYTHON_BIN=/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/.venv/bin/python \
+npm run dev -- --hostname 127.0.0.1 --port 3402
+```
+
+打开：
+
+- `http://127.0.0.1:3402/`
+- `http://127.0.0.1:3402/access`
+- `http://127.0.0.1:3402/datasets/<snapshotId>`
+- `http://127.0.0.1:3402/evaluation/<suiteId>`
+- `http://127.0.0.1:3402/feedback`
+
+当前 Dashboard 的对外口径已经统一为：
+
+- `请求归属清晰度`
+- `任务标签覆盖率`
+- `决策语义覆盖率`
+- `已生成验证资产`
+
+不再使用容易误导的旧说法，例如“任务识别清晰度”或“可评估运行”。
+
+页面展示也已经从“面向运维排查”收敛到“面向用户理解”：
+
+- session / run 默认展示任务标题、仓库名和实例摘要，原始 `sess_xxx` /
+  `run_xxx` 只作为次要标识
+- replay / access 页会优先展示步骤类型和摘要，例如 `模型推理`、`工具调用`、
+  `运行时事件`
+- 原始接口路径如 `/chat/completions` 只保留为次级技术细节，不再作为主标题
+
+在 `local-store` 模式下，`/feedback` 页面可以直接完成：
+
+- `人工确认并入池`
+- `标记已人工确认`
+- `关闭当前事项`
+
+这三类操作会通过通用 artifact / feedback 路径回写同一份 store，不依赖 benchmark
+专用 API。
 
 ## 2. Terminal A: start ClawGraph proxy
 
@@ -191,6 +258,25 @@ This keeps the architecture clean:
 - `clawgraph proxy` remains an ordinary OpenAI-compatible capture layer
 - the benchmark run naturally produces ClawGraph facts because the model traffic
   passes through the proxy
+
+## 3.1 Terminal C: start the Dashboard against the same store
+
+如果你希望边跑 benchmark 边看数据变化，可以单独开一个终端启动 Dashboard：
+
+```bash
+cd clawgraph/web
+NEXT_PUBLIC_DATA_MODE=prod \
+CLAWGRAPH_STORE_URI=sqlite:///../benchmarks/swebench_lite/clawgraph.db \
+CLAWGRAPH_PYTHON_BIN=/Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph/.venv/bin/python \
+npm run dev -- --hostname 127.0.0.1 --port 3402
+```
+
+推荐观察顺序：
+
+1. `/access` 看真实请求是否进入同一 session / run
+2. `/` 看 `任务标签覆盖率`、`决策语义覆盖率` 和 `已生成验证资产`
+3. `/feedback` 处理需要人工确认的低置信样本
+4. `/datasets/:snapshotId` 与 `/evaluation/:suiteId` 检查真实 manifest 和验证资产
 
 For a local single-instance smoke run without Docker:
 

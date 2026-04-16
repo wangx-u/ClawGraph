@@ -30,7 +30,7 @@ export default async function SupervisionPage() {
       />
 
       <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-        <Card eyebrow="自动准备" title="系统会先做这些基础步骤" strong>
+        <Card eyebrow="自动准备" title="系统已经自动完成的准备项" strong>
           <div className="space-y-3">
             {[
               ["基础任务标签", "为每条运行补齐 task instance、模板和来源信息。"],
@@ -69,21 +69,16 @@ export default async function SupervisionPage() {
           {actionRuns.length ? (
             actionRuns.slice(0, 3).map((run) => (
               <div className="panel-soft rounded-2xl p-4" key={run.runId}>
-                <div className="font-medium">{run.runId}</div>
-                <div className="mt-2 text-sm text-[color:var(--text-muted)]">{run.stageDetail}</div>
+                <div className="font-medium">{run.title ?? run.runId}</div>
+                <div className="mt-2 text-sm text-[color:var(--text-muted)]">{run.summary ?? run.stageDetail}</div>
                 <div className="mt-3 text-sm text-[color:var(--text-muted)]">下一步：{run.nextAction}</div>
+                <div className="mono mt-2 text-xs text-[color:var(--text-soft)]">运行 {run.runId}</div>
               </div>
             ))
           ) : (
-            [
-              "优先处理刚采集完成但还没进入数据池的运行。",
-              "只有在回放确认结构正确后，再补 preference 或 reward 这类高阶监督。",
-              "每一次判断都保留 producer、version 和 supersede 链，方便审计。"
-            ].map((item) => (
-              <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]" key={item}>
-                {item}
-              </div>
-            ))
+            <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+              当前没有需要额外处理的运行。新采集的数据会在自动清理、判断和复核后出现在这里。
+            </div>
           )}
         </div>
       </Card>

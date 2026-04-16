@@ -33,7 +33,7 @@ export default async function FlowPage({
         title={flow.title}
         description={flow.description}
         primaryAction={<Button href={links.primary} variant="primary">打开主工作区</Button>}
-        secondaryAction={<Button href={links.secondary} variant="secondary">打开辅助工作区</Button>}
+        secondaryAction={<Button href={links.secondary} variant="secondary">打开相关页面</Button>}
       />
 
       <div className="grid gap-6 xl:grid-cols-[1fr_0.95fr]">

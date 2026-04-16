@@ -79,6 +79,8 @@ ClawGraph 不负责：
   定义什么 slice 适合什么训练配方、模型带宽、fallback 和 coverage。
 - [评测、放量与回流标准](./replacement_validation)
   定义离线、golden、shadow、canary、回滚和回流机制。
+- [ClawGraph 与 Logits 的训练、评测、替代集成方案](./logits_training_integration.zh-CN.md)
+  定义怎样把 dataset snapshot 接到外部训练系统，并把 checkpoint 评测、promotion 和路由交接做成完整闭环。
 - [面向用户的 Dashboard 产品设计](./user_dashboard_prd.zh-CN.md)
   定义如何把以上分层能力组织成一套面向平台、训练、评估、PM 和 BD 的控制面板。
 - [Dashboard 页面线框与交互流拆解](./user_dashboard_wireframes.zh-CN.md)
@@ -89,8 +91,9 @@ ClawGraph 不负责：
 1. 先补齐 [证据采集与标注标准](./capture_and_labeling) 中的 identity、task、verifier、quality 字段。
 2. 再实现 [切片与 Cohort 策展标准](./cohort_curation) 中的 slice registry、candidate pool、cluster 和 cohort manifest。
 3. 然后按 [数据集快照与切分治理标准](./dataset_construction) 固化 dataset recipe 和快照。
-4. 再按 [任务切片覆盖、训练配方与路由标准](./task_model_policy) 定义 coverage policy，而不是先选模型。
-5. 最后严格按 [评测、放量与回流标准](./replacement_validation) 决定是否可以进入线上替代。
+4. 再按 [ClawGraph 与 Logits 的训练、评测、替代集成方案](./logits_training_integration.zh-CN.md) 打通 snapshot、训练、评测和候选模型血缘。
+5. 再按 [任务切片覆盖、训练配方与路由标准](./task_model_policy) 定义 coverage policy，而不是先选模型。
+6. 最后严格按 [评测、放量与回流标准](./replacement_validation) 决定是否可以进入线上替代。
 
 ## 与当前 ClawGraph 能力的关系
 
