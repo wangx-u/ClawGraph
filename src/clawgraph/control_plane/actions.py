@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from clawgraph.artifacts import resolve_e1_annotation_for_run
+from clawgraph.dashboard import inspect_run_workflow
 from clawgraph.dashboard_bundle import build_web_dashboard_bundle, normalize_store_uri
-from clawgraph.evaluation import update_feedback_queue_status
+from clawgraph.evaluation import sync_feedback_queue_from_slice_review, update_feedback_queue_status
 from clawgraph.integrations.logits._compat import load_dotted_object
 from clawgraph.integrations.logits.eval_bridge import evaluate_candidate_on_suite
 from clawgraph.integrations.logits.manifests import (
@@ -24,6 +26,7 @@ from clawgraph.integrations.logits.registry import (
 from clawgraph.integrations.logits.router_bridge import create_router_handoff_manifest
 from clawgraph.integrations.logits.training_bridge import submit_training_request
 from clawgraph.judge import plan_review_override
+from clawgraph.phase2 import _ensure_slice_for_annotation
 from clawgraph.protocol.models import ArtifactRecord
 from clawgraph.store import SQLiteFactStore
 
@@ -128,6 +131,127 @@ def review_override_action(
         "session_id": session_id,
         "feedback_items": feedback_items,
         "reviewer": reviewer,
+    }
+
+
+def sync_feedback_queue_action(
+    *,
+    store_uri: str,
+    slice_id: str,
+    source: str = "dashboard.review_sync",
+    session_id: str | None = None,
+    run_id: str | None = None,
+    task_instance_key: str | None = None,
+    task_template_hash: str | None = None,
+    min_quality_confidence: float | None = None,
+    min_verifier_score: float | None = None,
+    source_channel: str | None = None,
+    limit: int | None = None,
+    purpose: str | None = None,
+) -> dict[str, Any]:
+    result = sync_feedback_queue_from_slice_review(
+        store_uri=store_uri,
+        slice_id=slice_id,
+        source=source,
+        session=session_id,
+        run_id=run_id,
+        task_instance_key=task_instance_key,
+        task_template_hash=task_template_hash,
+        min_quality_confidence=min_quality_confidence,
+        min_verifier_score=min_verifier_score,
+        source_channel=source_channel,
+        limit=limit,
+        purpose=purpose,
+    )
+    return {
+        "action": "sync-feedback-queue",
+        "slice_id": slice_id,
+        "created_count": len(result.created),
+        "skipped_duplicates": result.skipped_duplicates,
+        "plan": result.plan.to_dict(),
+        "created": [item.to_dict() for item in result.created],
+    }
+
+
+def bootstrap_review_action(
+    *,
+    store_uri: str,
+    session_id: str,
+    run_id: str,
+    slice_id: str | None = None,
+    slice_owner: str = "clawgraph.dashboard",
+    slice_default_use: str = "training_candidate",
+    slice_risk_level: str = "medium",
+    source: str = "dashboard.review_sync",
+    min_quality_confidence: float | None = None,
+    min_verifier_score: float | None = None,
+    purpose: str | None = None,
+) -> dict[str, Any]:
+    store = SQLiteFactStore(store_uri)
+    facts = store.list_facts(session_id=session_id, run_id=run_id)
+    if not facts:
+        raise ValueError(f"no facts found for {session_id}/{run_id}")
+    artifacts = store.list_artifacts(
+        session_id=session_id,
+        run_id=run_id,
+        latest_only=True,
+    )
+    annotation_fields, artifact_ids = resolve_e1_annotation_for_run(
+        session_id=session_id,
+        run_id=run_id,
+        artifacts=artifacts,
+    )
+    required_fields = ("task_family", "task_type", "taxonomy_version", "verifier_name")
+    missing_fields = [
+        field
+        for field in required_fields
+        if not isinstance(annotation_fields.get(field), str) or not annotation_fields.get(field)
+    ]
+    if missing_fields:
+        raise ValueError(
+            "run is missing required E1 fields for slice bootstrap: "
+            + ", ".join(sorted(missing_fields))
+        )
+
+    slice_record, slice_created = _ensure_slice_for_annotation(
+        store=store,
+        fields=annotation_fields,
+        requested_slice_id=slice_id,
+        owner=slice_owner,
+        default_use=slice_default_use,
+        risk_level=slice_risk_level,
+    )
+    result = sync_feedback_queue_from_slice_review(
+        store=store,
+        slice_id=slice_record.slice_id,
+        source=source,
+        run_id=run_id,
+        min_quality_confidence=min_quality_confidence,
+        min_verifier_score=min_verifier_score,
+        purpose=purpose,
+    )
+    workflow_after = inspect_run_workflow(
+        store=store,
+        session=session_id,
+        run_id=run_id,
+    ).to_dict()
+    return {
+        "action": "bootstrap-review",
+        "session_id": session_id,
+        "run_id": run_id,
+        "slice": {
+            "created": slice_created,
+            "record": slice_record.to_dict(),
+        },
+        "feedback_sync": {
+            "created_count": len(result.created),
+            "skipped_duplicates": result.skipped_duplicates,
+            "plan": result.plan.to_dict(),
+            "created": [item.to_dict() for item in result.created],
+        },
+        "annotation_fields": annotation_fields,
+        "annotation_artifact_ids": artifact_ids,
+        "workflow_after": workflow_after,
     }
 
 

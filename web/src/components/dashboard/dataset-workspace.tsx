@@ -1,20 +1,27 @@
 "use client";
 
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type {
   BuilderReadiness,
+  CohortSummary,
   DatasetSnapshot,
   EvalSuite,
   ModelCandidate,
   RouterHandoff,
   TrainingRequest
 } from "@/lib/types";
+import {
+  getDatasetBuilderMeta,
+  getDatasetBuilderStage,
+  getLatestBuilderSnapshot
+} from "@/lib/dataset-flow";
 import { readinessLabel } from "@/lib/presenters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 type DatasetWorkspaceProps = {
+  cohorts: CohortSummary[];
   readinessRows: BuilderReadiness[];
   snapshots: DatasetSnapshot[];
   trainingRequests: TrainingRequest[];
@@ -23,26 +30,8 @@ type DatasetWorkspaceProps = {
   routerHandoffs: RouterHandoff[];
 };
 
-const BUILDER_COPY: Record<string, { label: string; description: string }> = {
-  facts: {
-    label: "Facts",
-    description: "偏原始事实聚合，适合追踪结构闭环与证据保真。"
-  },
-  sft: {
-    label: "SFT",
-    description: "用于监督微调的数据快照，强调 request 级可学习样本。"
-  },
-  preference: {
-    label: "Preference",
-    description: "用于偏好学习的成对样本，需要高质量分歧证据。"
-  },
-  binary_rl: {
-    label: "Binary RL",
-    description: "用于 run 级策略优化，关注 rollout 护栏和结果归因。"
-  }
-};
-
 export function DatasetWorkspace({
+  cohorts,
   readinessRows,
   snapshots,
   trainingRequests,
@@ -50,8 +39,17 @@ export function DatasetWorkspace({
   modelCandidates,
   routerHandoffs
 }: DatasetWorkspaceProps) {
+  const defaultBuilder =
+    readinessRows.find((row) => row.ready && !snapshots.some((snapshot) => snapshot.builder === row.builder))
+      ?.builder ??
+    readinessRows[0]?.builder ??
+    snapshots[0]?.builder ??
+    "";
   const [query, setQuery] = useState("");
-  const [selectedSnapshotId, setSelectedSnapshotId] = useState(snapshots[0]?.id ?? "");
+  const [selectedBuilder, setSelectedBuilder] = useState(defaultBuilder);
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState(
+    getLatestBuilderSnapshot(snapshots, defaultBuilder)?.id ?? ""
+  );
   const deferredQuery = useDeferredValue(query);
   const normalizedQuery = deferredQuery.trim().toLowerCase();
 
@@ -114,117 +112,424 @@ export function DatasetWorkspace({
     [normalizedQuery, snapshots]
   );
 
-  const currentSnapshot =
-    filteredSnapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ??
-    snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ??
-    filteredSnapshots[0] ??
-    snapshots[0];
-  const currentLineage = currentSnapshot ? snapshotLineage.get(currentSnapshot.id) : null;
-  const currentBuilder = currentSnapshot
-    ? readinessRows.find((row) => row.builder === currentSnapshot.builder)
-    : null;
-  const readyWithoutSnapshot = readinessRows.filter(
-    (row) => row.ready && !snapshots.some((snapshot) => snapshot.builder === row.builder)
+  const readyWithoutSnapshot = useMemo(
+    () => readinessRows.filter((row) => row.ready && !snapshots.some((snapshot) => snapshot.builder === row.builder)),
+    [readinessRows, snapshots]
   );
-  const blockedBuilders = readinessRows.filter((row) => !row.ready);
-  const builderCopy = currentSnapshot
-    ? BUILDER_COPY[currentSnapshot.builder] ?? {
-        label: currentSnapshot.builder,
-        description: "当前 builder 已被识别，可继续补齐下游导出与谱系关系。"
+  const readyWithHistory = useMemo(
+    () => readinessRows.filter((row) => row.ready && snapshots.some((snapshot) => snapshot.builder === row.builder)),
+    [readinessRows, snapshots]
+  );
+  const blockedBuilders = useMemo(
+    () => readinessRows.filter((row) => !row.ready),
+    [readinessRows]
+  );
+
+  useEffect(() => {
+    if (selectedSnapshotId && !filteredSnapshots.some((snapshot) => snapshot.id === selectedSnapshotId)) {
+      setSelectedSnapshotId(filteredSnapshots[0]?.id ?? "");
+    }
+  }, [filteredSnapshots, selectedSnapshotId]);
+
+  useEffect(() => {
+    if (!readinessRows.length && !snapshots.length) {
+      if (selectedBuilder) {
+        setSelectedBuilder("");
       }
-    : null;
+      return;
+    }
+
+    const candidateBuilderIds = new Set([
+      ...readinessRows.map((row) => row.builder),
+      ...snapshots.map((snapshot) => snapshot.builder)
+    ]);
+
+    if (!candidateBuilderIds.has(selectedBuilder)) {
+      setSelectedBuilder(
+        readyWithoutSnapshot[0]?.builder ??
+          readyWithHistory[0]?.builder ??
+          blockedBuilders[0]?.builder ??
+          snapshots[0]?.builder ??
+          ""
+      );
+    }
+  }, [blockedBuilders, readinessRows, readyWithHistory, readyWithoutSnapshot, selectedBuilder, snapshots]);
+
+  const currentSnapshot = filteredSnapshots.find((snapshot) => snapshot.id === selectedSnapshotId);
+  const currentLineage = currentSnapshot ? snapshotLineage.get(currentSnapshot.id) : null;
+  const currentBuilder =
+    readinessRows.find((row) => row.builder === selectedBuilder) ??
+    (currentSnapshot ? readinessRows.find((row) => row.builder === currentSnapshot.builder) : null) ??
+    readyWithoutSnapshot[0] ??
+    readyWithHistory[0] ??
+    blockedBuilders[0] ??
+    null;
+  const currentBuilderMeta = currentBuilder ? getDatasetBuilderMeta(currentBuilder.builder) : null;
+  const currentBuilderSnapshots = currentBuilder
+    ? snapshots.filter((snapshot) => snapshot.builder === currentBuilder.builder)
+    : [];
+  const latestBuilderSnapshot = currentBuilder
+    ? getLatestBuilderSnapshot(snapshots, currentBuilder.builder)
+    : undefined;
+  const latestBuilderLineage = latestBuilderSnapshot ? snapshotLineage.get(latestBuilderSnapshot.id) : null;
+  const recommendedCohort =
+    (latestBuilderSnapshot
+      ? cohorts.find((cohort) => cohort.id === latestBuilderSnapshot.cohortId)
+      : undefined) ??
+    cohorts.find((cohort) => cohort.purpose === "训练") ??
+    cohorts[0];
+  const builderStage = getDatasetBuilderStage(currentBuilder, snapshots);
+  const canExportFirstSnapshot = builderStage === "first_snapshot";
+  const canExportNewVersion = builderStage === "new_version";
 
   return (
     <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
-      <Card
-        action={<span className="text-xs text-[color:var(--text-soft)]">共 {filteredSnapshots.length} 份快照</span>}
-        eyebrow="数据快照谱系"
-        title="先从数据快照看上下游关系"
-        strong
-      >
-        <div className="space-y-4">
-          <div className="rounded-[1.1rem] border border-slate-200 bg-white/85 px-4 py-3 shadow-sm">
-            <input
-              className="w-full bg-transparent text-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--text-soft)]"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="按数据快照 / 批次 / 导出类型搜索"
-              value={query}
-            />
-          </div>
-
-          <div className="space-y-3">
-            {filteredSnapshots.length ? (
-              filteredSnapshots.map((snapshot) => {
-                const active = snapshot.id === currentSnapshot?.id;
-                const lineage = snapshotLineage.get(snapshot.id);
-                return (
-                  <button
-                    className={
-                      active
-                        ? "tech-highlight block w-full rounded-[1.2rem] p-4 text-left"
-                        : "panel-soft block w-full rounded-[1.2rem] p-4 text-left transition hover:-translate-y-[1px]"
-                    }
-                    key={snapshot.id}
-                    onClick={() => setSelectedSnapshotId(snapshot.id)}
-                    type="button"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium">{snapshot.title ?? snapshot.id}</div>
-                        <div className="mono mt-1 text-xs text-[color:var(--text-soft)]">{snapshot.id}</div>
-                      </div>
-                      <Badge tone="info">{snapshot.builder}</Badge>
-                    </div>
-                    <div className="mt-3 grid gap-2 text-sm text-[color:var(--text-muted)]">
-                      <div>来源批次：{snapshot.cohortName ?? snapshot.cohortId}</div>
-                      <div>
-                        下游资产：训练 {lineage?.requests.length ?? 0} · 验证 {lineage?.suites.length ?? 0} · 上线 {lineage?.handoffs.length ?? 0}
-                      </div>
-                      <div>{snapshot.recordCount} 条记录 · {snapshot.createdAt}</div>
-                    </div>
-                  </button>
-                );
-              })
-            ) : (
-              <div className="panel-soft rounded-[1.15rem] p-4 text-sm text-[color:var(--text-muted)]">
-                当前搜索条件下没有匹配快照。
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-3 border-t border-[color:var(--line)] pt-4">
+      <div className="space-y-6">
+        <Card
+          action={<span className="text-xs text-[color:var(--text-soft)]">共 {readinessRows.length} 个导出类型</span>}
+          eyebrow="当前导出队列"
+          title="先完成待导出动作"
+          strong
+        >
+          <div className="space-y-5">
+            <div className="space-y-3">
               <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">
-              已就绪但尚未冻结首版快照
+                待导出首版快照
               </div>
-            {readyWithoutSnapshot.length ? (
-              readyWithoutSnapshot.map((row) => (
-                <div className="panel-soft rounded-[1.1rem] p-4" key={row.builder}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                    <div className="font-medium">{row.builder}</div>
-                      <div className="mt-1 text-sm text-[color:var(--text-muted)]">{row.predictedRecords} 条预测记录</div>
-                    </div>
-                    <Badge tone="success">待导出首个快照</Badge>
-                  </div>
+              {readyWithoutSnapshot.length ? (
+                readyWithoutSnapshot.map((row) => {
+                  const active = row.builder === currentBuilder?.builder;
+                  const meta = getDatasetBuilderMeta(row.builder);
+                  return (
+                    <button
+                      className={
+                        active
+                          ? "tech-highlight block w-full rounded-[1.15rem] p-4 text-left"
+                          : "panel-soft block w-full rounded-[1.15rem] p-4 text-left transition hover:-translate-y-[1px]"
+                      }
+                      key={row.builder}
+                      onClick={() => {
+                        setSelectedBuilder(row.builder);
+                        setSelectedSnapshotId("");
+                      }}
+                      type="button"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{meta.label}</div>
+                          <div className="mt-1 text-sm text-[color:var(--text-muted)]">{meta.description}</div>
+                          <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                            预计 {row.predictedRecords} 条记录
+                          </div>
+                        </div>
+                        <Badge tone="success">可导出首版</Badge>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="panel-soft rounded-[1.1rem] p-4 text-sm text-[color:var(--text-muted)]">
+                  当前没有等待导出首版快照的导出类型。
                 </div>
-              ))
-            ) : (
-              <div className="panel-soft rounded-[1.1rem] p-4 text-sm text-[color:var(--text-muted)]">
-                当前所有已就绪导出类型都已经至少产出一份数据快照。
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">
+                可继续导出新版本
               </div>
-            )}
+              {readyWithHistory.length ? (
+                readyWithHistory.map((row) => {
+                  const active = row.builder === currentBuilder?.builder;
+                  const meta = getDatasetBuilderMeta(row.builder);
+                  const historyCount = snapshots.filter((snapshot) => snapshot.builder === row.builder).length;
+                  return (
+                    <button
+                      className={
+                        active
+                          ? "tech-highlight block w-full rounded-[1.15rem] p-4 text-left"
+                          : "panel-soft block w-full rounded-[1.15rem] p-4 text-left transition hover:-translate-y-[1px]"
+                      }
+                      key={row.builder}
+                      onClick={() => {
+                        const latestSnapshot = getLatestBuilderSnapshot(snapshots, row.builder);
+                        setSelectedBuilder(row.builder);
+                        setSelectedSnapshotId(latestSnapshot?.id ?? "");
+                      }}
+                      type="button"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{meta.label}</div>
+                          <div className="mt-1 text-sm text-[color:var(--text-muted)]">{historyCount} 份历史快照</div>
+                        </div>
+                        <Badge tone="info">可出新版本</Badge>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="panel-soft rounded-[1.1rem] p-4 text-sm text-[color:var(--text-muted)]">
+                  当前没有已经可刷新版本的导出类型。
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3 border-t border-[color:var(--line)] pt-4">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">
+                阻塞中的导出类型
+              </div>
+              {blockedBuilders.length ? (
+                blockedBuilders.map((row) => {
+                  const active = row.builder === currentBuilder?.builder;
+                  const meta = getDatasetBuilderMeta(row.builder);
+                  return (
+                    <button
+                      className={
+                        active
+                          ? "tech-highlight block w-full rounded-[1.15rem] p-4 text-left"
+                          : "panel-soft block w-full rounded-[1.15rem] p-4 text-left transition hover:-translate-y-[1px]"
+                      }
+                      key={row.builder}
+                      onClick={() => {
+                        setSelectedBuilder(row.builder);
+                        setSelectedSnapshotId("");
+                      }}
+                      type="button"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{meta.label}</div>
+                          <div className="mt-1 text-sm text-[color:var(--text-muted)]">
+                            {row.blockers[0] ?? "仍有待补条件"}
+                          </div>
+                        </div>
+                        <Badge tone="warning">阻塞</Badge>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="panel-soft rounded-[1.1rem] p-4 text-sm text-[color:var(--text-muted)]">
+                  当前没有阻塞中的导出类型。
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+
+        <Card
+          action={<span className="text-xs text-[color:var(--text-soft)]">共 {filteredSnapshots.length} 份快照</span>}
+          eyebrow="历史快照"
+          title="需要时再回看谱系"
+        >
+          <div className="space-y-4">
+            <div className="rounded-[1.1rem] border border-slate-200 bg-white/85 px-4 py-3 shadow-sm">
+              <input
+                className="w-full bg-transparent text-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--text-soft)]"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="按数据快照 / 批次 / 导出类型搜索"
+                value={query}
+              />
+            </div>
+
+            <div className="space-y-3">
+              {filteredSnapshots.length ? (
+                filteredSnapshots.map((snapshot) => {
+                  const active = snapshot.id === currentSnapshot?.id;
+                  const lineage = snapshotLineage.get(snapshot.id);
+                  const meta = getDatasetBuilderMeta(snapshot.builder);
+                  return (
+                    <button
+                      className={
+                        active
+                          ? "tech-highlight block w-full rounded-[1.15rem] p-4 text-left"
+                          : "panel-soft block w-full rounded-[1.15rem] p-4 text-left transition hover:-translate-y-[1px]"
+                      }
+                      key={snapshot.id}
+                      onClick={() => {
+                        setSelectedSnapshotId(snapshot.id);
+                        setSelectedBuilder(snapshot.builder);
+                      }}
+                      type="button"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">{snapshot.title ?? snapshot.id}</div>
+                          <div className="mono mt-1 text-xs text-[color:var(--text-soft)]">{snapshot.id}</div>
+                        </div>
+                        <Badge tone="info">{meta.label}</Badge>
+                      </div>
+                      <div className="mt-3 grid gap-2 text-sm text-[color:var(--text-muted)]">
+                        <div>来源批次：{snapshot.cohortName ?? snapshot.cohortId}</div>
+                        <div>
+                          下游资产：训练 {lineage?.requests.length ?? 0} · 验证 {lineage?.suites.length ?? 0} · 上线 {lineage?.handoffs.length ?? 0}
+                        </div>
+                        <div>{snapshot.recordCount} 条记录 · {snapshot.createdAt}</div>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="panel-soft rounded-[1.15rem] p-4 text-sm text-[color:var(--text-muted)]">
+                  当前搜索条件下没有匹配快照。
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      </div>
 
       <div className="space-y-6">
+        {currentBuilder ? (
+          <Card eyebrow="当前构建动作" title={currentBuilderMeta?.label ?? currentBuilder.builder} strong>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={currentBuilder.ready ? "success" : "warning"}>
+                {readinessLabel(currentBuilder.ready)}
+              </Badge>
+              <Badge tone={canExportFirstSnapshot ? "success" : canExportNewVersion ? "info" : "warning"}>
+                {canExportFirstSnapshot
+                  ? "待导出首版快照"
+                  : canExportNewVersion
+                    ? "可导出新版本"
+                    : "先处理 blocker"}
+              </Badge>
+            </div>
+            <p className="mt-4 max-w-3xl text-sm leading-6 text-[color:var(--text-muted)]">
+              {currentBuilderMeta?.description}
+            </p>
+            <div className="mt-4 grid gap-3 xl:grid-cols-3">
+              <div className="panel-soft rounded-[1.1rem] p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">Step 1 导出类型</div>
+                <div className="mt-2 font-medium">{currentBuilderMeta?.label ?? currentBuilder.builder}</div>
+                <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  预计 {currentBuilder.predictedRecords} 条记录
+                </div>
+              </div>
+              <div className="panel-soft rounded-[1.1rem] p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">Step 2 来源批次</div>
+                <div className="mt-2 font-medium">{recommendedCohort?.title ?? recommendedCohort?.name ?? "待确认"}</div>
+                <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  {recommendedCohort
+                    ? `${recommendedCohort.purpose} · 选中 ${recommendedCohort.selectedCount} · 待复核 ${recommendedCohort.reviewCount}`
+                    : "当前还没有可回看的来源批次。"}
+                </div>
+              </div>
+              <div className="panel-soft rounded-[1.1rem] p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">Step 3 当前动作</div>
+                <div className="mt-2 font-medium">
+                  {canExportFirstSnapshot
+                    ? "冻结首版快照"
+                    : canExportNewVersion
+                      ? "判断是否导出新版本"
+                      : "先回上游补数据"}
+                </div>
+                <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  {currentBuilderMeta?.nextAction}
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 rounded-2xl bg-white/70 px-4 py-3 text-sm text-[color:var(--text-muted)]">
+              {currentBuilder.blockers[0] ??
+                (canExportFirstSnapshot
+                  ? "当前已经满足首版快照的导出条件，下一步先确认来源批次。"
+                  : canExportNewVersion
+                    ? `当前已有 ${currentBuilderSnapshots.length} 份历史快照，可决定是否继续导出新版本。`
+                    : "当前导出类型还没有明确的下一步。")}
+            </div>
+            <div className="mt-5 flex flex-wrap gap-3">
+              {currentBuilder.ready ? (
+                <Button
+                  href={
+                    latestBuilderSnapshot
+                      ? `/datasets/${latestBuilderSnapshot.id}`
+                      : recommendedCohort
+                        ? `/curation/cohorts/${recommendedCohort.id}`
+                        : "/curation/candidates"
+                  }
+                  variant="primary"
+                >
+                  {latestBuilderSnapshot ? "打开最近版本" : "确认来源批次"}
+                </Button>
+              ) : (
+                <Button href="/curation/candidates" variant="primary">回到候选池补数据</Button>
+              )}
+              <Button
+                href={
+                  recommendedCohort
+                    ? `/curation/cohorts/${recommendedCohort.id}`
+                    : currentBuilder.ready
+                      ? "/flows/build-dataset"
+                      : "/supervision"
+                }
+                variant="secondary"
+              >
+                {recommendedCohort ? "查看来源批次" : currentBuilder.ready ? "查看导出步骤" : "回到自动判断"}
+              </Button>
+              {currentBuilder.ready ? (
+                <Button
+                  href={
+                    latestBuilderLineage?.requests.length
+                      ? "/training"
+                      : latestBuilderSnapshot
+                        ? "/evaluation"
+                        : "/datasets"
+                  }
+                  variant="ghost"
+                >
+                  {latestBuilderLineage?.requests.length
+                    ? "查看下游训练"
+                    : latestBuilderSnapshot
+                      ? "继续接评测"
+                      : "留在当前工作区"}
+                </Button>
+              ) : null}
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              <div className="panel-soft rounded-[1.1rem] p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">最近版本</div>
+                <div className="mt-2 font-medium">
+                  {latestBuilderSnapshot ? latestBuilderSnapshot.title ?? latestBuilderSnapshot.id : "还没有历史版本"}
+                </div>
+                <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  {latestBuilderSnapshot
+                    ? `${latestBuilderSnapshot.recordCount} 条记录 · ${latestBuilderSnapshot.createdAt}`
+                    : "当前 builder 仍在等待首版快照。"}
+                </div>
+              </div>
+              <div className="panel-soft rounded-[1.1rem] p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">下游训练</div>
+                <div className="mt-2 font-medium">{latestBuilderLineage?.requests.length ?? 0} 个训练请求</div>
+                <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  {latestBuilderLineage?.requests.length
+                    ? "最近版本已经接到训练资产，可继续跟踪评测和上线链路。"
+                    : "最近版本还没有进入训练请求，适合继续补训练资产。"}
+                </div>
+              </div>
+              <div className="panel-soft rounded-[1.1rem] p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">评测 / 上线</div>
+                <div className="mt-2 font-medium">
+                  {latestBuilderLineage?.suites.length ?? 0} / {latestBuilderLineage?.handoffs.length ?? 0}
+                </div>
+                <div className="mt-2 text-sm text-[color:var(--text-muted)]">
+                  {latestBuilderLineage?.handoffs.length
+                    ? "最近版本已经进入上线接替链路。"
+                    : latestBuilderLineage?.suites.length
+                      ? "最近版本已有评测资产，下一步可继续接上线控制面。"
+                      : "最近版本还没有评测和上线资产。"}
+                </div>
+              </div>
+            </div>
+          </Card>
+        ) : null}
+
         {currentSnapshot ? (
           <>
-            <Card eyebrow="当前快照" title={currentSnapshot.title ?? currentSnapshot.id} strong>
+            <Card eyebrow="当前历史快照" title={currentSnapshot.title ?? currentSnapshot.id} strong>
               <div className="grid gap-3 md:grid-cols-4">
                 <div className="tech-highlight rounded-2xl p-4">
                   <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">导出类型</div>
-                  <div className="mt-3 text-2xl font-semibold">{builderCopy?.label ?? currentSnapshot.builder}</div>
+                  <div className="mt-3 text-2xl font-semibold">{getDatasetBuilderMeta(currentSnapshot.builder).label}</div>
                 </div>
                 <div className="panel-soft rounded-2xl p-4">
                   <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-soft)]">记录数</div>
@@ -241,7 +546,6 @@ export function DatasetWorkspace({
                   </div>
                 </div>
               </div>
-              <p className="mt-4 text-sm leading-6 text-[color:var(--text-muted)]">{builderCopy?.description}</p>
               <div className="mt-4 grid gap-3 lg:grid-cols-3">
                 <div className="panel-soft rounded-[1.1rem] p-4 text-sm text-[color:var(--text-muted)]">
                   上游批次：{currentSnapshot.cohortName ?? currentSnapshot.cohortId}
@@ -259,13 +563,13 @@ export function DatasetWorkspace({
               </div>
             </Card>
 
-            <Card eyebrow="谱系链路" title="这份数据快照是如何进入下游的">
+            <Card eyebrow="谱系链路" title="这份历史快照是如何进入下游的">
               <div className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
                 <div className="space-y-4">
                   <div className="panel-soft rounded-[1.15rem] p-4">
                     <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">上游导出就绪度</div>
                     <div className="mt-2 flex items-center gap-2">
-                      <div className="text-lg font-semibold">{currentSnapshot.builder}</div>
+                      <div className="text-lg font-semibold">{getDatasetBuilderMeta(currentSnapshot.builder).label}</div>
                       {currentBuilder ? (
                         <Badge tone={currentBuilder.ready ? "success" : "warning"}>
                           {readinessLabel(currentBuilder.ready)}
@@ -278,16 +582,28 @@ export function DatasetWorkspace({
                   </div>
 
                   <div className="panel-soft rounded-[1.15rem] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">还在等待快照的 Blocker</div>
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--text-soft)]">仍在等待导出的类型</div>
                     <div className="mt-3 space-y-2">
-                      {blockedBuilders.length ? (
-                        blockedBuilders.slice(0, 3).map((row) => (
-                          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700" key={row.builder}>
-                            {row.builder}：{row.blockers[0] ?? "仍有待补条件"}
-                          </div>
-                        ))
+                      {readyWithoutSnapshot.length ? (
+                        readyWithoutSnapshot.slice(0, 3).map((row) => {
+                          const meta = getDatasetBuilderMeta(row.builder);
+                          return (
+                            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700" key={row.builder}>
+                              {meta.label}：已就绪，等待首版快照导出
+                            </div>
+                          );
+                        })
+                      ) : blockedBuilders.length ? (
+                        blockedBuilders.slice(0, 3).map((row) => {
+                          const meta = getDatasetBuilderMeta(row.builder);
+                          return (
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700" key={row.builder}>
+                              {meta.label}：{row.blockers[0] ?? "仍有待补条件"}
+                            </div>
+                          );
+                        })
                       ) : (
-                        <div className="text-sm text-[color:var(--text-muted)]">当前没有阻塞中的 builder。</div>
+                        <div className="text-sm text-[color:var(--text-muted)]">当前没有等待导出的 builder。</div>
                       )}
                     </div>
                   </div>
@@ -360,25 +676,9 @@ export function DatasetWorkspace({
             </Card>
           </>
         ) : (
-          <Card eyebrow="快照谱系" title="当前还没有历史数据快照" strong>
-            <div className="space-y-3">
-              <div className="panel-soft rounded-[1.15rem] p-4 text-sm text-[color:var(--text-muted)]">
-                可以先从已就绪导出类型发起首个导出，之后这里会按批次到数据快照，再到训练 / 评测 / 交接的顺序显示谱系。
-              </div>
-              {readyWithoutSnapshot.map((row) => (
-                <div className="tech-highlight rounded-[1.15rem] p-4" key={row.builder}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium">{row.builder}</div>
-                      <div className="mt-1 text-sm text-[color:var(--text-muted)]">{row.predictedRecords} 条预测记录</div>
-                    </div>
-                    <Badge tone="success">可导出首个快照</Badge>
-                  </div>
-                </div>
-              ))}
-              <div className="pt-2">
-                <Button href="/flows/build-dataset" variant="primary">发起导出流程</Button>
-              </div>
+          <Card eyebrow="历史快照" title="当前没有选中历史快照" strong>
+            <div className="panel-soft rounded-[1.15rem] p-4 text-sm text-[color:var(--text-muted)]">
+              先处理左侧待导出队列；只有在你明确选中某份历史快照后，这里才会展开它到训练、评测、上线接替的谱系。
             </div>
           </Card>
         )}

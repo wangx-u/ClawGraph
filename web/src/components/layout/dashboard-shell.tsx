@@ -4,7 +4,6 @@ import { buildPipelineStageSummaries } from "@/lib/pipeline";
 import { buildSearchIndex } from "@/lib/search";
 import { JobTray } from "@/components/layout/job-tray";
 import { PipelineNavigator } from "@/components/layout/pipeline-navigator";
-import { RightRail } from "@/components/layout/right-rail";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { TopBar } from "@/components/layout/top-bar";
 
@@ -24,7 +23,6 @@ export async function DashboardShell({ children }: DashboardShellProps) {
       <div className="flex gap-6">
         <SidebarNav stages={pipelineStages} />
         <main className="min-w-0 flex-1 space-y-6">{children}<JobTray jobs={bundle.jobs} /></main>
-        <RightRail />
       </div>
     </div>
   );

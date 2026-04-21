@@ -39,7 +39,60 @@ DEFAULT_PACKS: dict[str, list[dict[str, Any]]] = {
             "test_index": 15,
             "label": "multi-channel-send",
         },
-    ]
+    ],
+    "cross-service-stable": [
+        {
+            "suite_name": "Slack Bench",
+            "test_index": 15,
+            "label": "slack-multi-channel-send",
+            "max_steps": 12,
+            "max_tokens": 1800,
+        },
+        {
+            "suite_name": "Linear Bench",
+            "test_index": 9,
+            "label": "linear-create-multiple-issues",
+            "max_steps": 14,
+            "max_tokens": 1800,
+        },
+    ],
+    "cross-service-debug": [
+        {
+            "suite_name": "Slack Bench",
+            "test_index": 15,
+            "label": "slack-multi-channel-send",
+            "max_steps": 12,
+            "max_tokens": 1800,
+        },
+        {
+            "suite_name": "Linear Bench",
+            "test_index": 9,
+            "label": "linear-create-multiple-issues",
+            "max_steps": 14,
+            "max_tokens": 1800,
+        },
+        {
+            "suite_name": "Calendar Bench",
+            "test_index": 1,
+            "label": "calendar-multi-step-organization",
+            "max_steps": 20,
+            "max_tokens": 1800,
+        },
+        {
+            "suite_name": "Box Bench v2",
+            "test_index": 10,
+            "label": "box-nested-folders",
+            "max_steps": 16,
+            "max_tokens": 1800,
+        },
+        {
+            "suite_name": "GitHub Bench",
+            "test_index": 0,
+            "label": "github-request-reviewers",
+            "max_steps": 14,
+            "max_tokens": 1800,
+        },
+    ],
 }
 
 
@@ -72,6 +125,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-model", default="meta-llama/Llama-3.2-1B-Instruct")
     parser.add_argument("--min-successful-runs", type=int, default=4)
     parser.add_argument("--min-score", type=float, default=0.8)
+    parser.add_argument("--run-all", action="store_true")
     parser.add_argument("--phase2-output-dir", type=Path, default=Path("/tmp/clawgraph-agent-diff-logits-phase2"))
     parser.add_argument("--logits-output-dir", type=Path, default=Path("/tmp/clawgraph-agent-diff-logits-train"))
     parser.add_argument("--cohort-name", default="agent-diff-slack-sft")
@@ -126,6 +180,12 @@ def _run_demo(
         "--suite-name",
         spec["suite_name"],
     ]
+    if "max_steps" in spec:
+        command.extend(["--max-steps", str(spec["max_steps"])])
+    if "max_tokens" in spec:
+        command.extend(["--max-tokens", str(spec["max_tokens"])])
+    if "temperature" in spec:
+        command.extend(["--temperature", str(spec["temperature"])])
     if "test_index" in spec:
         command.extend(["--test-index", str(spec["test_index"])])
     if "test_id" in spec:
@@ -252,7 +312,7 @@ def main() -> int:
         runs.append(run)
         if payload.get("passed") and float(payload.get("score", 0.0)) >= args.min_score:
             successful.append(run)
-        if len(successful) >= args.min_successful_runs:
+        if not args.run_all and len(successful) >= args.min_successful_runs:
             break
 
     if len(successful) < args.min_successful_runs:
@@ -298,6 +358,7 @@ def main() -> int:
                 "label": run.label,
                 "suite_name": run.suite_name,
                 "test_name": run.payload.get("test_name"),
+                "service": run.payload.get("service"),
                 "passed": run.payload.get("passed"),
                 "score": run.payload.get("score"),
                 "clawgraph_session_id": run.payload.get("clawgraph_session_id"),

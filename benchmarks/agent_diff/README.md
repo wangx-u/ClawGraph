@@ -134,6 +134,28 @@ bash ./benchmarks/agent_diff/run_agent_diff_logits_pipeline.sh --json
 - 自动执行 `phase2 run --selection-scope slice`
 - 自动执行 `clawgraph logits prepare-sft`
 
+如果要做跨服务调试，而不是只收集 `Slack` 成功样本：
+
+```bash
+cd /Users/joker/go/src/github.com/wangx-u/agent-rl/clawgraph
+export DEEPSEEK_API_KEY='...'
+bash ./benchmarks/agent_diff/run_agent_diff_logits_pipeline.sh \
+  --pack cross-service-debug \
+  --run-all \
+  --min-successful-runs 2 \
+  --json
+```
+
+这会完整跑一轮混合场景：
+
+- `Slack Bench / Multi-channel send`
+- `Linear Bench / Create multiple issues in batch`
+- `Calendar Bench / Cosmic Voyagers Astronomy Club - Multi-step calendar organization`
+- `Box Bench v2 / Level 2: Nested Folders`
+- `GitHub Bench / Request reviewers on a PR`
+
+同时支持每条 case 独立的 `max_steps / max_tokens`，便于长链路调试。
+
 默认输出位置：
 
 - store: `/tmp/clawgraph-agent-diff-logits-demo.db`
@@ -148,6 +170,16 @@ bash ./benchmarks/agent_diff/run_agent_diff_logits_pipeline.sh --json
 - Logits training request：`train_45119f17ba434a12bb83d141d94b758b`
 - Logits 输入数据： [ds_69c0c9562fdd4cb8ba9fe28a3cc4439d.sft.conversations.jsonl](/tmp/clawgraph-agent-diff-logits-train/ds_69c0c9562fdd4cb8ba9fe28a3cc4439d.sft.conversations.jsonl)
 - training manifest： [train_45119f17ba434a12bb83d141d94b758b.sft.request.json](/tmp/clawgraph-agent-diff-logits-train/train_45119f17ba434a12bb83d141d94b758b.sft.request.json)
+
+另一轮跨服务调试的真实结果：
+
+- `Slack / Multi-channel send`：`passed=true`，`score=1.0`，`4` 次请求
+- `Linear / Create multiple issues in batch`：`passed=true`，`score=1.0`，`7` 次请求
+- `Calendar / Multi-step calendar organization`：`passed=false`，`score=0.4`，`20` 次请求
+- `Box / Nested Folders`：`passed=false`，`score≈0.67`，`10` 次请求
+- `GitHub / Request reviewers on a PR`：`passed=false`，`score=0.0`，`12` 次请求
+
+这组样本很适合专门看长链路 replay、review gate 和复杂失败样本的沉淀质量。
 
 ## 常用参数
 

@@ -54,6 +54,12 @@ SUPPORTED_ENDPOINT_HINTS = {
     "calendar": [
         "https://www.googleapis.com/calendar/v3/calendars/primary/events",
     ],
+    "github": [
+        "https://api.github.com/user",
+        "https://api.github.com/repos",
+        "https://api.github.com/repos/{owner}/{repo}/pulls",
+        "https://api.github.com/repos/{owner}/{repo}/issues",
+    ],
 }
 
 
@@ -126,6 +132,21 @@ def _resolve_suite_and_test(client: AgentDiff, *, suite_name: str, test_id: str 
 def _service_instruction(service: str) -> str:
     hints = SUPPORTED_ENDPOINT_HINTS.get(service, [])
     endpoint_block = "\n".join(f"- {item}" for item in hints) if hints else "- Use the service replica endpoints documented by Agent Diff."
+    service_notes = {
+        "github": (
+            "For GitHub tasks, first discover the target repository, pull request, or issue with GET requests. "
+            "Do not assume the repo name; inspect the replica state before mutating it."
+        ),
+        "box": (
+            "For Box tasks, verify folder and file ids before move or rename operations, and re-read the destination "
+            "state after each mutation."
+        ),
+        "calendar": (
+            "For Calendar tasks, list calendars and events before creating or deleting items, and verify the final "
+            "calendar state rather than relying on your own summary."
+        ),
+    }
+    extra_note = service_notes.get(service, "Verify each important mutation with a follow-up read before you claim completion.")
     return (
         f"You are solving one Agent Diff task against the {service} API replica.\n"
         "You must use the execute_bash tool to inspect or mutate the environment.\n"
@@ -133,6 +154,7 @@ def _service_instruction(service: str) -> str:
         "Keep commands short, explicit, and directly tied to the task.\n"
         "Useful endpoints include:\n"
         f"{endpoint_block}\n"
+        f"{extra_note}\n"
         "Authentication is already injected by Agent Diff. Use real service URLs; they will be routed automatically."
     )
 

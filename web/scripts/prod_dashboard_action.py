@@ -12,10 +12,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from clawgraph.control_plane.actions import (  # noqa: E402
+    bootstrap_review_action,
     create_handoff_action,
     evaluate_candidate_action,
     resolve_feedback_action,
     review_override_action,
+    sync_feedback_queue_action,
     submit_training_request_action,
 )
 
@@ -44,6 +46,33 @@ def parse_args() -> argparse.Namespace:
     override.add_argument("--reviewer")
     override.add_argument("--quality-confidence", type=float, default=1.0)
     override.add_argument("--verifier-score", type=float, default=1.0)
+
+    sync_feedback = subparsers.add_parser("sync-feedback")
+    sync_feedback.add_argument("--store", required=True)
+    sync_feedback.add_argument("--slice-id", required=True)
+    sync_feedback.add_argument("--session-id")
+    sync_feedback.add_argument("--run-id")
+    sync_feedback.add_argument("--task-instance-key")
+    sync_feedback.add_argument("--task-template-hash")
+    sync_feedback.add_argument("--source", default="dashboard.review_sync")
+    sync_feedback.add_argument("--min-quality-confidence", type=float)
+    sync_feedback.add_argument("--min-verifier-score", type=float)
+    sync_feedback.add_argument("--source-channel")
+    sync_feedback.add_argument("--limit", type=int)
+    sync_feedback.add_argument("--purpose")
+
+    bootstrap_review = subparsers.add_parser("bootstrap-review")
+    bootstrap_review.add_argument("--store", required=True)
+    bootstrap_review.add_argument("--session-id", required=True)
+    bootstrap_review.add_argument("--run-id", required=True)
+    bootstrap_review.add_argument("--slice-id")
+    bootstrap_review.add_argument("--slice-owner", default="clawgraph.dashboard")
+    bootstrap_review.add_argument("--slice-default-use", default="training_candidate")
+    bootstrap_review.add_argument("--slice-risk-level", default="medium")
+    bootstrap_review.add_argument("--source", default="dashboard.review_sync")
+    bootstrap_review.add_argument("--min-quality-confidence", type=float)
+    bootstrap_review.add_argument("--min-verifier-score", type=float)
+    bootstrap_review.add_argument("--purpose")
 
     submit = subparsers.add_parser("submit-training")
     submit.add_argument("--store", required=True)
@@ -106,6 +135,41 @@ def main() -> int:
             reviewer=args.reviewer or "dashboard.local",
             quality_confidence=args.quality_confidence,
             verifier_score=args.verifier_score,
+        )
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return 0
+
+    if args.action == "sync-feedback":
+        payload = sync_feedback_queue_action(
+            store_uri=args.store,
+            slice_id=args.slice_id,
+            session_id=args.session_id,
+            run_id=args.run_id,
+            task_instance_key=args.task_instance_key,
+            task_template_hash=args.task_template_hash,
+            source=args.source,
+            min_quality_confidence=args.min_quality_confidence,
+            min_verifier_score=args.min_verifier_score,
+            source_channel=args.source_channel,
+            limit=args.limit,
+            purpose=args.purpose,
+        )
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return 0
+
+    if args.action == "bootstrap-review":
+        payload = bootstrap_review_action(
+            store_uri=args.store,
+            session_id=args.session_id,
+            run_id=args.run_id,
+            slice_id=args.slice_id,
+            slice_owner=args.slice_owner,
+            slice_default_use=args.slice_default_use,
+            slice_risk_level=args.slice_risk_level,
+            source=args.source,
+            min_quality_confidence=args.min_quality_confidence,
+            min_verifier_score=args.min_verifier_score,
+            purpose=args.purpose,
         )
         sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         return 0

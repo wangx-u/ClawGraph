@@ -6,7 +6,7 @@ import { DatasetWorkspace } from "@/components/dashboard/dataset-workspace";
 
 export default async function DatasetsPage() {
   const {
-    bundle: { evalSuites, modelCandidates, readinessRows, routerHandoffs, snapshots, trainingRequests }
+    bundle: { cohorts, evalSuites, modelCandidates, readinessRows, routerHandoffs, snapshots, trainingRequests }
   } = await getDashboardBundle();
   const readyBuilders = readinessRows.filter((row) => row.ready).length;
   const waitingForFirstSnapshot = readinessRows.filter(
@@ -14,6 +14,7 @@ export default async function DatasetsPage() {
   ).length;
   const linkedTrainingRequests = (trainingRequests ?? []).filter((request) => request.datasetSnapshotId).length;
   const linkedEvalSuites = (evalSuites ?? []).filter((suite) => suite.datasetSnapshotId).length;
+  const recommendedCohort = cohorts.find((cohort) => cohort.purpose === "训练") ?? cohorts[0];
 
   if (!readinessRows.length && !snapshots.length) {
     return (
@@ -38,9 +39,16 @@ export default async function DatasetsPage() {
     <div className="space-y-6">
       <PageHeader
         title="数据集"
-        description="先按数据快照谱系查看批次、快照、训练请求、评测和上线接替的关系，再回看导出就绪度和待导出队列。"
-        primaryAction={<Button href="/flows/build-dataset" variant="primary">导出快照</Button>}
-        secondaryAction={<Button href="/curation/candidates" variant="secondary">返回策展</Button>}
+        description="先处理待导出队列和来源批次，再冻结首版快照或新版本；历史快照谱系放在后半段查看。"
+        primaryAction={
+          <Button
+            href={recommendedCohort ? `/curation/cohorts/${recommendedCohort.id}` : "/curation/candidates"}
+            variant="primary"
+          >
+            {recommendedCohort ? "确认当前训练批次" : "返回策展"}
+          </Button>
+        }
+        secondaryAction={<Button href="/flows/build-dataset" variant="secondary">查看导出步骤</Button>}
       />
 
       <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
@@ -63,6 +71,7 @@ export default async function DatasetsPage() {
       </div>
 
       <DatasetWorkspace
+        cohorts={cohorts}
         evalSuites={evalSuites ?? []}
         modelCandidates={modelCandidates ?? []}
         readinessRows={readinessRows}

@@ -74,6 +74,11 @@ def build_web_dashboard_bundle(
     run_rows_by_id = {row.run_id: row for row in snapshot.recent_runs}
     workflow_rows_by_id = {row.run_id: row for row in snapshot.workflow_runs}
     session_rows_by_id = {row.session_id: row for row in snapshot.recent_sessions}
+    slices = service.list_slices()
+    slice_label_map = {
+        slice_record.slice_id: task_label(slice_record.task_family, slice_record.task_type)
+        for slice_record in slices
+    }
 
     session_ids = list(resolved_store.iter_sessions())[:session_limit]
     sessions_payload: list[dict[str, Any]] = []
@@ -122,10 +127,17 @@ def build_web_dashboard_bundle(
             request_summaries = build_request_span_summaries(run_facts, run_artifacts)
             branch_summaries = build_branch_inspect_summaries(run_facts, run_artifacts)
             readiness_summary = build_dataset_readiness_summary(run_facts, run_artifacts)
+            annotation_metadata = active_run_annotation_metadata(run_artifacts)
+            score_payload = active_run_score_payload(run_artifacts)
             request_fact_map = {
                 fact.request_id: fact
                 for fact in run_facts
                 if fact.kind == "request_started" and isinstance(fact.request_id, str)
+            }
+            response_fact_map = {
+                fact.request_id: fact
+                for fact in run_facts
+                if fact.kind == "response_finished" and isinstance(fact.request_id, str)
             }
             declared_count = sum(1 for branch in branch_summaries if branch.source == "declared")
             declared_ratio = declared_count / len(branch_summaries) if branch_summaries else 1.0
@@ -159,14 +171,33 @@ def build_web_dashboard_bundle(
                 task_instance_key=task_instance_key,
                 annotation_payload=annotation_payload,
             )
+            slice_id = resolve_slice_id(
+                slices=slices,
+                task_family=run_row.task_family,
+                task_type=run_row.task_type,
+                taxonomy_version=(
+                    annotation_payload.get("taxonomy_version")
+                    if isinstance(annotation_payload.get("taxonomy_version"), str)
+                    else None
+                ),
+            )
 
             run_payload = {
                 "id": run_id,
                 "title": run_title,
                 "summary": run_summary,
                 "taskLabel": task_label(run_row.task_family, run_row.task_type),
+                "taskFamily": run_row.task_family,
+                "taskType": run_row.task_type,
+                "taxonomyVersion": (
+                    annotation_payload.get("taxonomy_version")
+                    if isinstance(annotation_payload.get("taxonomy_version"), str)
+                    else None
+                ),
                 "taskInstanceKey": task_instance_key,
                 "taskInstanceLabel": task_instance_name,
+                "sliceId": slice_id,
+                "sliceLabel": slice_label_map.get(slice_id) if isinstance(slice_id, str) else None,
                 "repo": annotation_payload.get("repo") if isinstance(annotation_payload.get("repo"), str) else None,
                 "requestCount": run_row.request_count,
                 "successCount": run_row.success_count,
@@ -230,6 +261,58 @@ def build_web_dashboard_bundle(
                     "runId": run_id,
                     "title": run_title,
                     "summary": run_summary,
+                    "prompt": (
+                        annotation_metadata.get("prompt")
+                        if isinstance(annotation_metadata.get("prompt"), str)
+                        else None
+                    ),
+                    "suiteName": (
+                        annotation_payload.get("suite_name")
+                        if isinstance(annotation_payload.get("suite_name"), str)
+                        else None
+                    ),
+                    "testName": (
+                        annotation_payload.get("test_name")
+                        if isinstance(annotation_payload.get("test_name"), str)
+                        else None
+                    ),
+                    "environmentId": (
+                        annotation_metadata.get("environment_id")
+                        if isinstance(annotation_metadata.get("environment_id"), str)
+                        else None
+                    ),
+                    "verifierName": (
+                        annotation_payload.get("verifier_name")
+                        if isinstance(annotation_payload.get("verifier_name"), str)
+                        else None
+                    ),
+                    "verifierScore": (
+                        float(annotation_payload.get("verifier_score"))
+                        if isinstance(annotation_payload.get("verifier_score"), (int, float))
+                        else None
+                    ),
+                    "qualityConfidence": (
+                        float(annotation_payload.get("quality_confidence"))
+                        if isinstance(annotation_payload.get("quality_confidence"), (int, float))
+                        else None
+                    ),
+                    "scoreValue": (
+                        float(score_payload.get("score"))
+                        if isinstance(score_payload.get("score"), (int, float))
+                        else None
+                    ),
+                    "scorePassed": (
+                        bool(score_payload.get("passed"))
+                        if isinstance(score_payload.get("passed"), bool)
+                        else None
+                    ),
+                    "diffSummary": (
+                        score_payload.get("diff_summary")
+                        if isinstance(score_payload.get("diff_summary"), dict)
+                        else None
+                    ),
+                    "sliceId": slice_id,
+                    "sliceLabel": slice_label_map.get(slice_id) if isinstance(slice_id, str) else None,
                     "outcome": run_payload["outcome"],
                     "timeline": [step["label"] for step in timeline_steps],
                     "timelineSteps": timeline_steps,
@@ -262,7 +345,11 @@ def build_web_dashboard_bundle(
                             "summary": describe_request_summary(
                                 request_summary=summary,
                                 request_fact=request_fact_map.get(summary.request_id),
+                                response_fact=response_fact_map.get(summary.request_id),
                             ),
+                            "assistantMessage": response_message(response_fact_map.get(summary.request_id)),
+                            "toolName": response_tool_name(response_fact_map.get(summary.request_id)),
+                            "toolCommand": response_tool_command(response_fact_map.get(summary.request_id)),
                             "outcome": summary.outcome,
                             "status": summary.status_code or (102 if summary.outcome == "open" else 0),
                             "latency": format_latency(summary.total_latency_ms),
@@ -299,7 +386,6 @@ def build_web_dashboard_bundle(
             }
         )
 
-    slices = service.list_slices()
     cohorts = service.list_cohorts()
     snapshots = service.list_dataset_snapshots()
     eval_suites = service.list_eval_suites()
@@ -307,10 +393,6 @@ def build_web_dashboard_bundle(
     decisions = service.list_promotion_decisions()
     feedback_items = service.list_feedback_queue()
     slice_lookup = {slice_record.slice_id: slice_record for slice_record in slices}
-    slice_label_map = {
-        slice_record.slice_id: task_label(slice_record.task_family, slice_record.task_type)
-        for slice_record in slices
-    }
 
     holdout_run_ids: set[str] = set()
     cohort_payloads: list[dict[str, Any]] = []
@@ -1115,6 +1197,33 @@ def active_run_annotation_payload(artifacts: list[Any]) -> dict[str, Any]:
     return {}
 
 
+def active_run_annotation_metadata(artifacts: list[Any]) -> dict[str, Any]:
+    for artifact in artifacts:
+        if artifact.status != "active":
+            continue
+        if artifact.artifact_type != "annotation":
+            continue
+        payload = artifact.payload if isinstance(artifact.payload, dict) else None
+        if payload is None or payload.get("annotation_kind") != "e1":
+            continue
+        metadata = artifact.metadata if isinstance(artifact.metadata, dict) else None
+        return metadata or {}
+    return {}
+
+
+def active_run_score_payload(artifacts: list[Any]) -> dict[str, Any]:
+    for artifact in artifacts:
+        if artifact.status != "active":
+            continue
+        if artifact.artifact_type != "score":
+            continue
+        payload = artifact.payload if isinstance(artifact.payload, dict) else None
+        if payload is None:
+            continue
+        return payload
+    return {}
+
+
 def describe_task_instance(
     *,
     task_instance_key: str | None,
@@ -1228,10 +1337,16 @@ def endpoint_label(path: str | None, actor: str) -> str:
     return humanize_identifier((path or "runtime").strip("/")) or "运行时"
 
 
-def describe_request_summary(*, request_summary: Any, request_fact: Any | None) -> str:
+def describe_request_summary(*, request_summary: Any, request_fact: Any | None, response_fact: Any | None) -> str:
     preview = request_preview(request_fact)
     if preview:
         return preview
+    tool_command = response_tool_command(response_fact)
+    if tool_command:
+        return shorten_text(tool_command, limit=96)
+    assistant_preview = response_message(response_fact)
+    if assistant_preview:
+        return shorten_text(assistant_preview, limit=96)
     label = endpoint_label(getattr(request_summary, "path", None), safe_actor(getattr(request_summary, "actor", None)))
     outcome = getattr(request_summary, "outcome", None)
     if outcome == "failed":
@@ -1273,6 +1388,81 @@ def message_preview(message: Any) -> str | None:
                     parts.append(text.strip())
         if parts:
             return shorten_text(" ".join(parts))
+    return None
+
+
+def response_message(response_fact: Any | None) -> str | None:
+    if response_fact is None or not isinstance(response_fact.payload, dict):
+        return None
+    canonical = response_fact.payload.get("canonical")
+    if not isinstance(canonical, dict):
+        return None
+    assistant_message = canonical.get("assistant_message")
+    return message_preview(assistant_message)
+
+
+def response_tool_name(response_fact: Any | None) -> str | None:
+    tool_call = response_tool_call(response_fact)
+    if not isinstance(tool_call, dict):
+        return None
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        return None
+    name = function.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def response_tool_command(response_fact: Any | None) -> str | None:
+    tool_call = response_tool_call(response_fact)
+    if not isinstance(tool_call, dict):
+        return None
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        return None
+    arguments = function.get("arguments")
+    if not isinstance(arguments, str) or not arguments.strip():
+        return None
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return shorten_text(arguments, limit=120)
+    command = parsed.get("command") if isinstance(parsed, dict) else None
+    if isinstance(command, str) and command.strip():
+        return shorten_text(command, limit=120)
+    return shorten_text(arguments, limit=120)
+
+
+def response_tool_call(response_fact: Any | None) -> dict[str, Any] | None:
+    if response_fact is None or not isinstance(response_fact.payload, dict):
+        return None
+    canonical = response_fact.payload.get("canonical")
+    if not isinstance(canonical, dict):
+        return None
+    assistant_message = canonical.get("assistant_message")
+    if not isinstance(assistant_message, dict):
+        return None
+    tool_calls = assistant_message.get("tool_calls")
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return None
+    first = tool_calls[0]
+    return first if isinstance(first, dict) else None
+
+
+def resolve_slice_id(
+    *,
+    slices: list[Any],
+    task_family: str | None,
+    task_type: str | None,
+    taxonomy_version: str | None,
+) -> str | None:
+    for slice_record in slices:
+        if slice_record.task_family != task_family:
+            continue
+        if slice_record.task_type != task_type:
+            continue
+        if taxonomy_version and slice_record.taxonomy_version != taxonomy_version:
+            continue
+        return slice_record.slice_id
     return None
 
 
@@ -1318,6 +1508,18 @@ def fact_timeline_step(fact: Any) -> dict[str, str]:
             "detail": preview or "已发起一次新的步骤",
         }
     if fact.kind == "response_finished":
+        tool_command = response_tool_command(fact)
+        if tool_command:
+            return {
+                "label": f"{endpoint}完成",
+                "detail": tool_command,
+            }
+        assistant_preview = response_message(fact)
+        if assistant_preview:
+            return {
+                "label": f"{endpoint}完成",
+                "detail": assistant_preview,
+            }
         return {
             "label": f"{endpoint}完成",
             "detail": response_detail(fact),

@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 const flowLinks: Record<string, { primary: string; secondary: string }> = {
   "connect-runtime": { primary: "/access", secondary: "/sessions" },
   "investigate-failure": { primary: "/sessions", secondary: "/supervision" },
-  "build-dataset": { primary: "/curation/candidates", secondary: "/datasets" },
+  "build-dataset": { primary: "/datasets", secondary: "/curation/candidates" },
   "validate-slice": { primary: "/coverage", secondary: "/evaluation" },
   "review-feedback": { primary: "/feedback", secondary: "/curation/candidates" },
   "operate-training": { primary: "/training", secondary: "/evaluation" }

@@ -2,20 +2,33 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  bootstrapReviewAction as bootstrapReviewInStore,
   resolveFeedbackAction as resolveFeedbackInStore,
-  reviewOverrideAction as reviewOverrideInStore
+  reviewOverrideAction as reviewOverrideInStore,
+  syncFeedbackQueueAction as syncFeedbackQueueInStore
 } from "@/lib/dashboard-actions";
 
-function revalidateDashboardViews() {
-  [
+function revalidateDashboardViews(sessionId?: string, runId?: string) {
+  const paths = new Set([
     "/",
     "/access",
     "/feedback",
+    "/sessions",
+    "/supervision",
+    "/training",
+    "/coverage",
     "/datasets",
     "/evaluation",
     "/curation/cohorts",
     "/curation/candidates"
-  ].forEach((path) => revalidatePath(path));
+  ]);
+  if (sessionId) {
+    paths.add(`/sessions/${sessionId}`);
+    if (runId) {
+      paths.add(`/sessions/${sessionId}/runs/${runId}/replay`);
+    }
+  }
+  paths.forEach((path) => revalidatePath(path));
 }
 
 export async function markFeedbackReviewed(formData: FormData) {
@@ -57,5 +70,37 @@ export async function confirmRunByHuman(formData: FormData) {
     feedbackId,
     reviewNote: "已在 Dashboard 中人工确认，可进入数据集或验证流程。"
   });
-  revalidateDashboardViews();
+  revalidateDashboardViews(sessionId, runId);
+}
+
+export async function syncRunFeedbackQueue(formData: FormData) {
+  const sliceId = String(formData.get("sliceId") ?? "");
+  const sessionId = String(formData.get("sessionId") ?? "");
+  const runId = String(formData.get("runId") ?? "");
+  if (!sliceId || !sessionId || !runId) {
+    throw new Error("sliceId, sessionId and runId are required");
+  }
+  await syncFeedbackQueueInStore({
+    sliceId,
+    sessionId,
+    runId,
+    source: "dashboard.review_sync",
+    purpose: "replay_review"
+  });
+  revalidateDashboardViews(sessionId, runId);
+}
+
+export async function bootstrapReplayGovernance(formData: FormData) {
+  const sessionId = String(formData.get("sessionId") ?? "");
+  const runId = String(formData.get("runId") ?? "");
+  if (!sessionId || !runId) {
+    throw new Error("sessionId and runId are required");
+  }
+  await bootstrapReviewInStore({
+    sessionId,
+    runId,
+    source: "dashboard.review_sync",
+    purpose: "replay_review"
+  });
+  revalidateDashboardViews(sessionId, runId);
 }
