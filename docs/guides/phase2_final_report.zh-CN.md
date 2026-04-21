@@ -12,7 +12,7 @@
   `fact -> artifact -> slice -> cohort -> dataset_snapshot / eval_suite / scorecard / promotion`
 - benchmark 相关逻辑仅体现在脚本、配置和验证文档，不进入框架核心分支
 
-最终状态不是“还能继续做的原型”，而是“已经可直接使用的通用链路”：
+最终状态不是“停留在概念验证的原型”，而是“在研发验证和定向合作环境里已经可直接使用的通用链路”：
 
 1. proxy 捕获真实 agent 流量
 2. trajectory prepare / clean / gate
@@ -22,6 +22,8 @@
 6. 自动形成 slice / cohort / dataset export / eval suite / scorecard /
    promotion decision
 7. dashboard snapshot 和 web bundle 能直接读取同一份 live store
+
+这说明闭环和对象模型已经成立，但不应直接等同于“托管产品发布完成态”。
 
 ## 2. 核心实现
 
@@ -124,7 +126,7 @@
 
 当前 Web 侧已经不是只读监控面板，而是具备以下能力：
 
-- 在 `local-store` 模式下直接完成人工确认、标记 reviewed、关闭 feedback
+- 在首方 HTTP API 或 `local-store` 模式下直接完成人工确认、标记 reviewed、关闭 feedback
 - 数据集 / cohort / evaluation 详情页只展示真实 manifest 字段，不再展示伪造信息
 - 用 Playwright 覆盖首页、接入页、详情页和人工复核关键路径
 - 用真实 bundle 验证“人类可读标题 + 真实 manifest + 可操作复核”这一套

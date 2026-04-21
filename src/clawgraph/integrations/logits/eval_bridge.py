@@ -18,6 +18,7 @@ from clawgraph.integrations.logits.manifests import (
     ModelCandidateManifest,
     save_manifest,
 )
+from clawgraph.integrations.logits.registry import persist_training_manifest_record
 from clawgraph.store import SQLiteFactStore
 
 
@@ -337,7 +338,18 @@ def evaluate_candidate_on_suite(
         },
     )
     if output_path is not None:
-        save_manifest(manifest, output_path)
+        destination = save_manifest(manifest, output_path)
+        persist_training_manifest_record(
+            manifest=manifest,
+            store_uri=store_uri,
+            manifest_path=str(destination),
+        )
+    else:
+        persist_training_manifest_record(
+            manifest=manifest,
+            store_uri=store_uri,
+            manifest_path=None,
+        )
     return manifest, scorecard, promotion
 
 

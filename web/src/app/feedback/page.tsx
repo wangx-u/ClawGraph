@@ -15,7 +15,7 @@ export default async function FeedbackPage() {
   const queuedCount = feedbackItems.filter((item) => item.status === "queued").length;
   const reviewedCount = feedbackItems.filter((item) => item.status === "reviewed").length;
   const resolvedCount = feedbackItems.filter((item) => item.status === "resolved").length;
-  const canMutate = meta.provider === "local-store";
+  const canMutate = Boolean(meta.supportsMutations);
 
   return (
     <div className="space-y-6">
@@ -35,8 +35,8 @@ export default async function FeedbackPage() {
       {!canMutate ? (
         <Card eyebrow="当前模式" title="此数据源暂为只读" strong>
           <p className="text-sm leading-6 text-[color:var(--text-muted)]">
-            当前页面连接的是远端 HTTP bundle。浏览器内直接 resolve / override 需要远端 mutation API；
-            在本地 store 模式下这些按钮会自动可用。
+            当前页面连接的数据源暂不支持写操作。浏览器内直接 resolve / override 需要启用首方
+            Dashboard HTTP API，或让当前部署拥有本地 store 写入能力。
           </p>
         </Card>
       ) : null}

@@ -3,19 +3,28 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { navGroups } from "@/lib/navigation";
+import { resolvePipelineStageIdFromPath } from "@/lib/pipeline";
+import type { PipelineStageSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
-export function SidebarNav() {
+type SidebarNavProps = {
+  stages: PipelineStageSummary[];
+};
+
+export function SidebarNav({ stages }: SidebarNavProps) {
   const pathname = usePathname();
+  const activeStageId = resolvePipelineStageIdFromPath(pathname);
+  const stageMap = new Map(stages.map((stage) => [stage.id, stage]));
 
   return (
     <aside className="hidden w-[280px] shrink-0 xl:block">
       <div className="surface-strong sticky top-4 rounded-[1.6rem] p-4">
         <div className="mb-6">
           <div className="text-[11px] uppercase tracking-[0.22em] text-sky-700/80">ClawGraph</div>
-          <div className="mt-2 text-2xl font-semibold">真实流量数据台</div>
+          <div className="mt-2 text-2xl font-semibold">学习数据与模型接替控制面</div>
           <p className="mt-2 text-sm text-[color:var(--text-muted)]">
-            从接入、数据准备、人工复核到数据快照和评测验证。
+            按 1-9 阶段闭环推进接入、轨迹、数据集生产、验证与上线接替。
           </p>
         </div>
         <div className="space-y-5">
@@ -26,7 +35,10 @@ export function SidebarNav() {
               </div>
               <div className="space-y-1">
                 {group.items.map((item) => {
-                  const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+                  const stage = item.stageId ? stageMap.get(item.stageId) : null;
+                  const active = item.stageId
+                    ? item.stageId === activeStageId
+                    : pathname === item.href;
                   return (
                     <Link
                       className={cn(
@@ -38,7 +50,19 @@ export function SidebarNav() {
                       href={item.href}
                       key={item.href}
                     >
-                      <div className="font-medium">{item.title}</div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="font-medium">{item.title}</div>
+                        {stage ? (
+                          stage.blockerCount > 0 || stage.count > 0 ? (
+                            <Badge
+                              className="shrink-0"
+                              tone={stage.blockerCount > 0 ? "warning" : stage.tone}
+                            >
+                              {stage.blockerCount > 0 ? `${stage.blockerCount} 阻塞` : stage.count}
+                            </Badge>
+                          ) : null
+                        ) : null}
+                      </div>
                       <div className="mt-1 text-xs text-inherit/80">{item.description}</div>
                     </Link>
                   );

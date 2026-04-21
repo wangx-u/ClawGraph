@@ -16,16 +16,93 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { FilterBar } from "@/components/ui/filter-bar";
 
 type SessionInboxWorkspaceProps = {
   sessions: SessionSummary[];
 };
 
 type SessionView = "all" | "attention" | "ready";
+type EvidenceFilter = "all" | "captured" | "curatable" | "evaluable";
+type OutcomeFilter = "all" | "failed" | "open" | "succeeded";
+type TrajectoryFilter = "all" | "mixed" | "declared";
+type DataStateFilter = "all" | "needs_judging" | "candidate_ready" | "dataset_ready";
+
+function runReadyForDataset(run: SessionSummary["runs"][number]) {
+  return (
+    run.evidenceLevel === "E2" &&
+    run.openCount === 0 &&
+    Boolean(run.readyBuilders?.length) &&
+    !(run.readinessBlockers?.length)
+  );
+}
+
+function runReadyForCandidate(run: SessionSummary["runs"][number]) {
+  return run.openCount === 0 && run.evidenceLevel !== "E0";
+}
+
+function sessionMatchesReadyView(session: SessionSummary) {
+  return session.runs.some((run) => runReadyForCandidate(run) || runReadyForDataset(run));
+}
+
+function sessionMatchesEvidence(session: SessionSummary, filter: EvidenceFilter) {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "captured") {
+    return session.runs.some((run) => run.evidenceLevel === "E0");
+  }
+  if (filter === "curatable") {
+    return session.runs.some((run) => run.evidenceLevel === "E1");
+  }
+  return session.runs.some((run) => run.evidenceLevel === "E2");
+}
+
+function sessionMatchesOutcome(session: SessionSummary, filter: OutcomeFilter) {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "failed") {
+    return session.runs.some((run) => run.outcome === "failed");
+  }
+  if (filter === "open") {
+    return session.runs.some((run) => run.outcome === "open");
+  }
+  return session.runs.every((run) => run.outcome === "succeeded");
+}
+
+function sessionMatchesTrajectory(session: SessionSummary, filter: TrajectoryFilter) {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "mixed") {
+    return session.runs.some((run) => run.declaredRatio < 0.75);
+  }
+  return session.runs.every((run) => run.declaredRatio >= 0.75);
+}
+
+function sessionMatchesDataState(session: SessionSummary, filter: DataStateFilter) {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "needs_judging") {
+    return session.runs.some(
+      (run) => run.openCount > 0 || run.evidenceLevel === "E0" || run.reviewStatus === "review"
+    );
+  }
+  if (filter === "candidate_ready") {
+    return session.runs.some((run) => runReadyForCandidate(run) && !runReadyForDataset(run));
+  }
+  return session.runs.some((run) => runReadyForDataset(run));
+}
 
 export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState<SessionView>("all");
+  const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>("all");
+  const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>("all");
+  const [trajectoryFilter, setTrajectoryFilter] = useState<TrajectoryFilter>("all");
+  const [dataStateFilter, setDataStateFilter] = useState<DataStateFilter>("all");
   const [selectedSessionId, setSelectedSessionId] = useState(sessions[0]?.id ?? "");
   const [selectedRunId, setSelectedRunId] = useState(sessions[0]?.runs[0]?.id ?? "");
   const deferredQuery = useDeferredValue(query);
@@ -36,9 +113,18 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
         ? true
         : view === "attention"
         ? session.anomalies.length > 0 || session.runs.some((run) => run.outcome !== "succeeded")
-        : session.runs.some((run) => run.stage === "dataset" || run.stage === "evaluate");
+        : sessionMatchesReadyView(session);
 
     if (!matchesView) {
+      return false;
+    }
+
+    if (
+      !sessionMatchesEvidence(session, evidenceFilter) ||
+      !sessionMatchesOutcome(session, outcomeFilter) ||
+      !sessionMatchesTrajectory(session, trajectoryFilter) ||
+      !sessionMatchesDataState(session, dataStateFilter)
+    ) {
       return false;
     }
 
@@ -62,24 +148,37 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
     return haystack.includes(normalizedQuery);
   });
 
-  const selectedSession =
-    filteredSessions.find((session) => session.id === selectedSessionId) ??
-    sessions.find((session) => session.id === selectedSessionId) ??
-    filteredSessions[0] ??
-    sessions[0];
+  const selectedSession = filteredSessions.find((session) => session.id === selectedSessionId) ?? filteredSessions[0];
 
   useEffect(() => {
-    if (!selectedSession) {
+    if (!filteredSessions.length) {
+      if (selectedSessionId) {
+        setSelectedSessionId("");
+      }
+      if (selectedRunId) {
+        setSelectedRunId("");
+      }
       return;
     }
-    setSelectedSessionId(selectedSession.id);
-    if (!selectedSession.runs.find((run) => run.id === selectedRunId)) {
-      setSelectedRunId(selectedSession.runs[0]?.id ?? "");
+
+    if (!filteredSessions.some((session) => session.id === selectedSessionId)) {
+      const nextSession = filteredSessions[0];
+      setSelectedSessionId(nextSession.id);
+      setSelectedRunId(nextSession.runs[0]?.id ?? "");
+      return;
     }
-  }, [selectedRunId, selectedSession]);
+
+    const currentSession =
+      filteredSessions.find((session) => session.id === selectedSessionId) ?? filteredSessions[0];
+
+    if (!currentSession.runs.find((run) => run.id === selectedRunId)) {
+      setSelectedRunId(currentSession.runs[0]?.id ?? "");
+    }
+  }, [filteredSessions, selectedRunId, selectedSessionId]);
 
   const selectedRun =
     selectedSession?.runs.find((run) => run.id === selectedRunId) ?? selectedSession?.runs[0];
+  const selectedRunBlockers = selectedRun?.readinessBlockers ?? selectedRun?.blockers ?? [];
 
   return (
     <div className="grid gap-6 xl:grid-cols-[0.88fr_1.12fr]">
@@ -94,15 +193,66 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
             <input
               className="w-full bg-transparent text-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--text-soft)]"
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="按任务、仓库、实例或异常关键词搜索"
+              placeholder="按会话、运行、任务或异常关键词搜索"
               value={query}
             />
           </div>
+          <FilterBar
+            groups={[
+              {
+                id: "evidence",
+                label: "证据状态",
+                value: evidenceFilter,
+                options: [
+                  { id: "all", label: "全部" },
+                  { id: "captured", label: "已采集" },
+                  { id: "curatable", label: "可筛选" },
+                  { id: "evaluable", label: "可评估" }
+                ],
+                onChange: (value) => setEvidenceFilter(value as EvidenceFilter)
+              },
+              {
+                id: "outcome",
+                label: "运行结果",
+                value: outcomeFilter,
+                options: [
+                  { id: "all", label: "全部" },
+                  { id: "failed", label: "有失败" },
+                  { id: "open", label: "仍进行中" },
+                  { id: "succeeded", label: "全部成功" }
+                ],
+                onChange: (value) => setOutcomeFilter(value as OutcomeFilter)
+              },
+              {
+                id: "trajectory",
+                label: "轨迹可信度",
+                value: trajectoryFilter,
+                options: [
+                  { id: "all", label: "全部" },
+                  { id: "mixed", label: "含推断分支" },
+                  { id: "declared", label: "显式为主" }
+                ],
+                onChange: (value) => setTrajectoryFilter(value as TrajectoryFilter)
+              },
+              {
+                id: "data-state",
+                label: "数据状态",
+                value: dataStateFilter,
+                options: [
+                  { id: "all", label: "全部" },
+                  { id: "needs_judging", label: "待补判断" },
+                  { id: "candidate_ready", label: "可入候选" },
+                  { id: "dataset_ready", label: "可入数据集" }
+                ],
+                onChange: (value) => setDataStateFilter(value as DataStateFilter)
+              }
+            ]}
+          />
           <div className="flex flex-wrap gap-2">
             {[
               ["all", "全部"],
               ["attention", "优先处理"],
-              ["ready", "可导出 / 可评估"]
+              ["ready", "可入候选 / 数据集"]
             ].map(([id, label]) => (
               <button
                 className={
@@ -271,9 +421,9 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
                   <div className="mt-4 rounded-2xl bg-white/70 px-4 py-3 text-sm text-[color:var(--text-muted)]">
                     下一步：{selectedRun.nextAction ?? "进入回放后确认下一步动作"}
                   </div>
-                  {selectedRun.blockers?.length ? (
+                  {selectedRunBlockers.length ? (
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {selectedRun.blockers.slice(0, 3).map((blocker) => (
+                      {selectedRunBlockers.slice(0, 3).map((blocker) => (
                         <Badge key={blocker} tone="warning">
                           {blocker}
                         </Badge>
@@ -292,8 +442,45 @@ export function SessionInboxWorkspace({ sessions }: SessionInboxWorkspaceProps) 
               ) : null}
             </div>
           </Card>
+
+          <Card eyebrow="结构异常" title="当前会话需要优先修复的问题">
+            {selectedSession.anomalies.length ? (
+              <div className="space-y-3">
+                {selectedSession.anomalies.map((anomaly) => (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700" key={anomaly}>
+                    {anomaly}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="panel-soft rounded-[1.1rem] p-4 text-sm text-[color:var(--text-muted)]">
+                当前选中的会话没有高优先级结构异常，可以继续处理运行分诊和下一步动作。
+              </div>
+            )}
+          </Card>
         </div>
-      ) : null}
+      ) : (
+        <Card eyebrow="筛选结果" title="当前没有匹配会话" strong>
+          <div className="space-y-4">
+            <div className="panel-soft rounded-[1.1rem] p-4 text-sm leading-6 text-[color:var(--text-muted)]">
+              这组筛选条件下没有会话可查看。先放宽关键词或筛选条件，再继续查看右侧详情。
+            </div>
+            <Button
+              onClick={() => {
+                setQuery("");
+                setView("all");
+                setEvidenceFilter("all");
+                setOutcomeFilter("all");
+                setTrajectoryFilter("all");
+                setDataStateFilter("all");
+              }}
+              variant="secondary"
+            >
+              重置筛选
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

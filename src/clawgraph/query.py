@@ -16,6 +16,7 @@ from clawgraph.protocol.models import (
     PromotionDecisionRecord,
     ScorecardRecord,
     SliceRecord,
+    TrainingAssetRecord,
 )
 from clawgraph.store import SQLiteFactStore
 
@@ -243,3 +244,27 @@ class ClawGraphQueryService:
         """Return one feedback queue item by id."""
 
         return self.store.get_feedback_queue_item(feedback_id)
+
+    def get_training_asset(self, asset_id: str) -> TrainingAssetRecord | None:
+        """Return one persisted training asset by id."""
+
+        return self.store.get_training_asset(asset_id)
+
+    def list_training_assets(
+        self,
+        *,
+        asset_kind: str | None = None,
+        training_request_id: str | None = None,
+        candidate_model_id: str | None = None,
+        eval_suite_id: str | None = None,
+        dataset_snapshot_id: str | None = None,
+    ) -> list[TrainingAssetRecord]:
+        """List persisted training assets."""
+
+        return self.store.list_training_assets(
+            asset_kind=asset_kind,
+            training_request_id=training_request_id,
+            candidate_model_id=candidate_model_id,
+            eval_suite_id=eval_suite_id,
+            dataset_snapshot_id=dataset_snapshot_id,
+        )

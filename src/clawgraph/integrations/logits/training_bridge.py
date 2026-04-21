@@ -16,6 +16,7 @@ from clawgraph.integrations.logits.manifests import (
 from clawgraph.integrations.logits.preference_adapter import (
     export_preference_snapshot_for_logits,
 )
+from clawgraph.integrations.logits.registry import persist_training_manifest_record
 from clawgraph.integrations.logits.sft_adapter import (
     export_sft_snapshot_for_logits,
     load_dataset_snapshot,
@@ -139,9 +140,9 @@ def prepare_sft_training_request(
         },
     )
     if manifest_path is not None:
-        save_manifest(request, manifest_path)
+        destination = save_manifest(request, manifest_path)
     else:
-        save_manifest(
+        destination = save_manifest(
             request,
             _default_manifest_path(
                 output_dir=output_dir,
@@ -149,6 +150,11 @@ def prepare_sft_training_request(
                 recipe_family=request.recipe_family,
             ),
         )
+    persist_training_manifest_record(
+        manifest=request,
+        store=store,
+        manifest_path=str(destination),
+    )
     return request
 
 
@@ -233,9 +239,9 @@ def prepare_dpo_training_request(
         },
     )
     if manifest_path is not None:
-        save_manifest(request, manifest_path)
+        destination = save_manifest(request, manifest_path)
     else:
-        save_manifest(
+        destination = save_manifest(
             request,
             _default_manifest_path(
                 output_dir=output_dir,
@@ -243,11 +249,17 @@ def prepare_dpo_training_request(
                 recipe_family=request.recipe_family,
             ),
         )
+    persist_training_manifest_record(
+        manifest=request,
+        store=store,
+        manifest_path=str(destination),
+    )
     return request
 
 
 def prepare_rl_training_request(
     *,
+    store_uri: str | None = None,
     output_dir: Path,
     base_model: str,
     dataset_builder_ref: str,
@@ -303,9 +315,9 @@ def prepare_rl_training_request(
         },
     )
     if manifest_path is not None:
-        save_manifest(request, manifest_path)
+        destination = save_manifest(request, manifest_path)
     else:
-        save_manifest(
+        destination = save_manifest(
             request,
             _default_manifest_path(
                 output_dir=output_dir,
@@ -313,12 +325,19 @@ def prepare_rl_training_request(
                 recipe_family=request.recipe_family,
             ),
         )
+    if store_uri:
+        persist_training_manifest_record(
+            manifest=request,
+            store_uri=store_uri,
+            manifest_path=str(destination),
+        )
     return request
 
 
 def submit_training_request(
     manifest: TrainingRequestManifest,
     *,
+    store_uri: str | None = None,
     candidate_path: Path | None = None,
     executor: Callable[[TrainingRequestManifest], Any] | None = None,
 ) -> ModelCandidateManifest:
@@ -366,7 +385,13 @@ def submit_training_request(
     if destination is None:
         base_dir = Path(manifest.log_path).parent.parent if Path(manifest.log_path).parent.name == "runs" else Path(manifest.log_path).parent
         destination = _default_candidate_path(output_dir=base_dir, candidate_id=candidate.candidate_model_id)
-    save_manifest(candidate, destination)
+    output = save_manifest(candidate, destination)
+    if store_uri:
+        persist_training_manifest_record(
+            manifest=candidate,
+            store_uri=store_uri,
+            manifest_path=str(output),
+        )
     return candidate
 
 
@@ -586,4 +611,3 @@ def _run_builtin_rl_training(manifest: TrainingRequestManifest) -> dict[str, Any
             "dataset_builder_ref": dataset_builder_ref,
         },
     }
-

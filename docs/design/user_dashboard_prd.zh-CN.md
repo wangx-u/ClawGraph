@@ -25,9 +25,9 @@
 
 ClawGraph 不是 agent runtime，不是训练引擎，也不是单纯的 tracing 平台。
 
-它的真实定位是：
+对外更适合的一级定位是：
 
-一个把真实 agent 执行稳定转化为训练资产、评测资产和放量决策资产的学习数据中间层。
+一个把真实 agent 执行稳定转化为训练数据、验证资产和替代建议的控制面。
 
 ### 2.2 当前系统分层
 
@@ -116,6 +116,11 @@ OpenClaw / agent runtime
    `sess_xxx`、`run_xxx`、`/chat/completions` 仍保留，但只作为二级技术信息。
 7. benchmark collection 默认支持 named instance pack，用于跨 repo、多类型任务的持续沉淀，
    不再依赖手写的单一实例列表。
+8. 训练资产链路已经进入产品面：
+   Web 可读取 `training request / model candidate / eval execution / router handoff`
+   manifest；但训练执行本身仍由外部 Logits 系统负责，不在 Web 内发起。
+9. 对外宣发时应优先使用“学习数据与替代验证控制面”这一套表述。
+   “中间层 / 控制台 / 驾驶舱”可以作为内部设计语言存在，但不应并列成为多个一级定位。
 
 ## 3. Dashboard 的总定位
 
@@ -123,7 +128,7 @@ OpenClaw / agent runtime
 
 Dashboard 应定位为：
 
-一个“学习数据控制台 + 训练资产运营台 + 替代验证驾驶舱”。
+一个“学习数据与替代验证控制面”。
 
 它的核心价值不是只让用户“看到日志”，而是让用户沿着以下闭环工作：
 
@@ -158,14 +163,15 @@ Dashboard 应定位为：
 
 1. `Overview`
 2. `Access`
-3. `Session Inbox`
+3. `最近运行`
 4. `Replay`
-5. `Supervision`
-6. `Curation`
+5. `数据准备（Supervision）`
+6. `数据筛选（Curation）`
 7. `Datasets`
-8. `Evaluation`
-9. `Coverage`
-10. `Feedback`
+8. `训练资产`
+9. `Evaluation`
+10. `替代建议（Coverage）`
+11. `人工复核（Feedback）`
 
 ### 4.2 模块与底层能力映射
 
@@ -173,14 +179,15 @@ Dashboard 应定位为：
 | --- | --- | --- | --- | --- |
 | `Overview` | 聚合层，不新增事实源 | 全局健康、资产产出、替代机会 | PM、BD、负责人 | 已实现 |
 | `Access` | `proxy`、payload、runtime integration | 接入、监控、身份上下文、语义接入 | 平台、Runtime 工程师 | 已实现 |
-| `Session Inbox` | `session/run/request/fact` | 新采集运行总览、质量分诊、E0/E1/E2 判定 | 平台、评估、运营 | 已实现 |
+| `最近运行` | `session/run/request/fact` | 新采集运行总览、质量分诊、E0/E1/E2 判定 | 平台、评估、运营 | 已实现 |
 | `Replay` | `branch`、`replay`、`inspect` | 轨迹回放、分支树、失败排查 | Runtime、评估、RL | 已实现 |
-| `Supervision` | `semantic event`、`artifact` | 语义声明、bootstrap、打分、偏好、标签治理 | 评估、RL | 已实现 |
-| `Curation` | `slice`、candidate pool、`cohort` | 切片、筛选、冻结、holdout、review queue | RL、数据运营、PM | 已实现，策略仍可继续增强 |
+| `数据准备（Supervision）` | `semantic event`、`artifact` | 语义声明、bootstrap、打分、偏好、标签治理 | 评估、RL | 已实现 |
+| `数据筛选（Curation）` | `slice`、candidate pool、`cohort` | 切片、筛选、冻结、holdout、review queue | RL、数据运营、PM | 已实现，策略仍可继续增强 |
 | `Datasets` | readiness、builder、`dataset snapshot`、export | 训练样本预览、split、manifest、导出 | RL、平台 | 已实现 |
+| `训练资产` | training request、candidate、eval execution、handoff | 训练血缘、候选结果、评测回写、交接状态 | 平台、训练、评估 | 已实现，执行仍由外部训练系统负责 |
 | `Evaluation` | `eval suite`、`scorecard`、`promotion decision` | 替代验证、离线/回归/影子评测 | 评估、PM、BD | 已实现，自动闭环已接通 |
-| `Coverage` | coverage policy、route policy、rollout | 哪些 slice 允许小模型覆盖 | PM、BD、平台 | 设计已明确 |
-| `Feedback` | `feedback queue`、cohort refresh | fallback / disagreement / verifier fail 回流 | 评估、训练、运营 | 已实现，Web 在 local-store 模式下可直接操作 |
+| `替代建议（Coverage）` | coverage policy、route policy、rollout | 哪些 slice 允许小模型覆盖 | PM、BD、平台 | 设计已明确 |
+| `人工复核（Feedback）` | `feedback queue`、cohort refresh | fallback / disagreement / verifier fail 回流 | 评估、训练、运营 | 已实现，Web 在 local-store 模式下可直接操作 |
 
 ### 4.3 对象关系图
 

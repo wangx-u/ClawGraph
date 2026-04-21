@@ -292,6 +292,48 @@ class PromotionDecisionRecord:
 
 
 @dataclass(slots=True)
+class TrainingAssetRecord:
+    """Persisted training asset used to reconstruct request/candidate/eval/handoff lineage."""
+
+    asset_id: str
+    schema_version: str
+    asset_kind: str
+    title: str
+    status: str
+    manifest: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
+    training_request_id: str | None = None
+    candidate_model_id: str | None = None
+    eval_suite_id: str | None = None
+    dataset_snapshot_id: str | None = None
+    scorecard_id: str | None = None
+    promotion_decision_id: str | None = None
+    slice_id: str | None = None
+    manifest_path: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "asset_id": self.asset_id,
+            "schema_version": self.schema_version,
+            "asset_kind": self.asset_kind,
+            "title": self.title,
+            "status": self.status,
+            "manifest": self.manifest,
+            "created_at": None if self.created_at is None else self.created_at.isoformat(),
+            "training_request_id": self.training_request_id,
+            "candidate_model_id": self.candidate_model_id,
+            "eval_suite_id": self.eval_suite_id,
+            "dataset_snapshot_id": self.dataset_snapshot_id,
+            "scorecard_id": self.scorecard_id,
+            "promotion_decision_id": self.promotion_decision_id,
+            "slice_id": self.slice_id,
+            "manifest_path": self.manifest_path,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass(slots=True)
 class FeedbackQueueRecord:
     """Persisted feedback item that should flow back into curation/training."""
 

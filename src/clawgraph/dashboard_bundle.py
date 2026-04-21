@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -15,6 +16,14 @@ from clawgraph.graph import (
     build_request_span_summaries,
     build_session_inspect_summary,
 )
+from clawgraph.integrations.logits.manifests import (
+    EvalExecutionManifest,
+    ModelCandidateManifest,
+    RouterHandoffManifest,
+    TrainingRequestManifest,
+    load_manifest as load_logits_manifest,
+)
+from clawgraph.integrations.logits.registry import build_training_registry
 from clawgraph.query import ClawGraphQueryService
 from clawgraph.store import SQLiteFactStore
 
@@ -44,6 +53,7 @@ def build_web_dashboard_bundle(
     *,
     store_uri: str | None = None,
     store: SQLiteFactStore | None = None,
+    manifest_dir: str | None = None,
     session_limit: int = 12,
     run_limit: int = 24,
     artifact_limit: int = 40,
@@ -75,6 +85,10 @@ def build_web_dashboard_bundle(
         lambda: {"ready_runs": 0, "predicted_records": 0, "blockers": set()}
     )
     all_runs: list[dict[str, Any]] = []
+    training_registry = build_training_registry(
+        manifest_dir=manifest_dir,
+        store=resolved_store,
+    )
 
     for session_id in session_ids:
         facts = resolved_store.list_facts(session_id=session_id)
@@ -422,6 +436,9 @@ def build_web_dashboard_bundle(
             }
         )
     snapshot_lookup = {item["id"]: item for item in snapshot_payloads}
+    training_registry_summary = training_registry["summary"]
+    training_request_payloads = training_registry["training_requests"]
+    model_candidate_payloads = training_registry["model_candidates"]
     scorecard_payloads = [
         {
             "id": scorecard.scorecard_id,
@@ -486,9 +503,12 @@ def build_web_dashboard_bundle(
         }
         for suite in eval_suites
     ]
+    eval_execution_payloads = training_registry["eval_executions"]
+    router_handoff_payloads = training_registry["router_handoffs"]
 
     coverage_rows: list[dict[str, Any]] = []
     opportunity_items: list[dict[str, Any]] = []
+    coverage_guardrails: set[str] = set()
     for slice_record in slices:
         slice_scorecard = next(
             (scorecard for scorecard in scorecards if scorecard.slice_id == slice_record.slice_id),
@@ -499,7 +519,7 @@ def build_web_dashboard_bundle(
             None,
         )
         verdict = verdict_for_records(slice_scorecard, slice_decision)
-        rollout = rollout_for_decision(slice_decision)
+        recommended_stage = rollout_for_decision(slice_decision)
         recipe_builders = sorted(
             {
                 snapshot_record.builder
@@ -529,11 +549,21 @@ def build_web_dashboard_bundle(
                 "risk": slice_record.risk_level,
                 "complexity": complexity_for_sample_unit(slice_record.sample_unit),
                 "recipe": recipe,
-                "modelBand": slice_scorecard.candidate_model if slice_scorecard is not None else "待配置",
+                "candidateModel": slice_scorecard.candidate_model if slice_scorecard is not None else "待配置",
                 "verdict": verdict,
-                "rollout": rollout,
+                "decision": None if slice_decision is None else slice_decision.decision,
+                "promotionStage": None if slice_decision is None else slice_decision.stage,
+                "recommendedStage": recommended_stage,
+                "coveragePolicyVersion": (
+                    None if slice_decision is None else slice_decision.coverage_policy_version
+                ),
+                "rollbackConditions": (
+                    [] if slice_decision is None else list(slice_decision.rollback_conditions)
+                ),
             }
         )
+        if slice_decision is not None:
+            coverage_guardrails.update(str(item) for item in slice_decision.rollback_conditions if str(item))
         opportunity_items.append(
             {
                 "sliceId": slice_record.slice_id,
@@ -756,6 +786,33 @@ def build_web_dashboard_bundle(
         )
 
     jobs = []
+    for request in training_request_payloads[:2]:
+        jobs.append(
+            {
+                "id": f"job:training:{request['id']}",
+                "label": f"训练请求 {request['title']}",
+                "status": request["status"],
+                "detail": f"{request['recipeFamily']} · {request['datasetSnapshotTitle']}",
+            }
+        )
+    for candidate in model_candidate_payloads[:2]:
+        jobs.append(
+            {
+                "id": f"job:candidate:{candidate['id']}",
+                "label": f"候选模型 {candidate['title']}",
+                "status": "completed",
+                "detail": candidate["summary"],
+            }
+        )
+    for execution in eval_execution_payloads[:1]:
+        jobs.append(
+            {
+                "id": f"job:evalexec:{execution['id']}",
+                "label": f"评测执行 {execution['title']}",
+                "status": "completed",
+                "detail": execution["summary"],
+            }
+        )
     for snapshot_record in snapshot_payloads[:2]:
         jobs.append(
             {
@@ -887,7 +944,13 @@ def build_web_dashboard_bundle(
         "evalSuites": eval_suite_payloads,
         "scorecards": scorecard_payloads,
         "coverageRows": coverage_rows,
+        "coverageGuardrails": sorted(coverage_guardrails),
         "feedbackItems": feedback_payloads,
+        "trainingRegistrySummary": training_registry_summary,
+        "trainingRequests": training_request_payloads,
+        "modelCandidates": model_candidate_payloads,
+        "evalExecutions": eval_execution_payloads,
+        "routerHandoffs": router_handoff_payloads,
         "jobs": jobs,
     }
 
@@ -1365,3 +1428,95 @@ def describe_cohort_contract(value: Any) -> str:
     if isinstance(expected_use, str) and expected_use:
         return f"{humanize_identifier(expected_use)} · {quality_gate}"
     return quality_gate
+
+
+def build_training_request_title(manifest: TrainingRequestManifest) -> str:
+    dataset = manifest.dataset_snapshot_id or manifest.eval_suite_id or manifest.training_request_id
+    return f"{manifest.recipe_family.upper()} · {dataset}"
+
+
+def describe_training_request(manifest: TrainingRequestManifest) -> str:
+    dataset = manifest.dataset_snapshot_id or "未绑定快照"
+    return f"{manifest.base_model} · 数据快照 {dataset}"
+
+
+def training_request_status(
+    manifest: TrainingRequestManifest,
+    candidate_entries: list[dict[str, Any]],
+) -> str:
+    if any(
+        isinstance(item.get("manifest"), ModelCandidateManifest)
+        and item["manifest"].training_request_id == manifest.training_request_id
+        for item in candidate_entries
+    ):
+        return "completed"
+    return "queued"
+
+
+def build_candidate_title(manifest: ModelCandidateManifest) -> str:
+    candidate_name = (
+        manifest.candidate_model
+        or manifest.published_model_path
+        or manifest.sampler_path
+        or manifest.checkpoint_path
+        or manifest.candidate_model_id
+    )
+    return shorten_text(candidate_name, limit=48)
+
+
+def describe_model_candidate(manifest: ModelCandidateManifest) -> str:
+    dataset = manifest.dataset_snapshot_id or "未绑定快照"
+    return f"{manifest.recipe_family.upper()} · 基座 {manifest.base_model} · 快照 {dataset}"
+
+
+def build_eval_execution_title(manifest: EvalExecutionManifest) -> str:
+    return f"{manifest.grader_name} · {manifest.case_count} 个样本"
+
+
+def describe_eval_execution(manifest: EvalExecutionManifest) -> str:
+    return f"验证套件 {manifest.eval_suite_id} · 候选 {manifest.candidate_model}"
+
+
+def build_router_handoff_title(manifest: RouterHandoffManifest) -> str:
+    return f"{manifest.stage} · {manifest.decision}"
+
+
+def describe_router_handoff(manifest: RouterHandoffManifest) -> str:
+    return f"{manifest.slice_id} · {manifest.candidate_model}"
+
+
+def _manifest_sort_key(entry: dict[str, Any]) -> str:
+    manifest = entry.get("manifest")
+    created_at = getattr(manifest, "created_at", None)
+    return str(created_at or "")
+
+
+def _load_logits_manifest_inventory(manifest_dir: str | None) -> dict[str, list[dict[str, Any]]]:
+    inventory = {
+        "training_requests": [],
+        "model_candidates": [],
+        "eval_executions": [],
+        "router_handoffs": [],
+    }
+    if not isinstance(manifest_dir, str) or not manifest_dir.strip():
+        return inventory
+    root = Path(manifest_dir).expanduser()
+    if not root.exists():
+        return inventory
+    for path in root.rglob("*.json"):
+        try:
+            manifest = load_logits_manifest(path)
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            continue
+        entry = {"path": str(path), "manifest": manifest}
+        if isinstance(manifest, TrainingRequestManifest):
+            inventory["training_requests"].append(entry)
+        elif isinstance(manifest, ModelCandidateManifest):
+            inventory["model_candidates"].append(entry)
+        elif isinstance(manifest, EvalExecutionManifest):
+            inventory["eval_executions"].append(entry)
+        elif isinstance(manifest, RouterHandoffManifest):
+            inventory["router_handoffs"].append(entry)
+    for key in inventory:
+        inventory[key].sort(key=_manifest_sort_key, reverse=True)
+    return inventory

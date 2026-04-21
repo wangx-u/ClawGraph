@@ -27,8 +27,21 @@
   多任务类型的长期沉淀
 - Web 已将 raw id 和原始接口路径降级为次要信息，主展示改为任务标题、
   仓库摘要和步骤类型
+- Web 已补充训练资产控制面：
+  `training request / model candidate / eval execution / router handoff`
+  可以通过 manifest 目录进入同一个 dashboard bundle
+- Training 详情页和 `clawgraph logits registry` 已共享同一份训练资产 read model，
+  不再分别在 CLI 和 Web 各自拼装血缘关系
+- Coverage 页面当前只展示真实 `candidate / decision / recommended stage / rollback conditions`
+  不再把固定示例规则渲染成线上策略
 
 因此，下文的阶段划分应理解为“设计与实现如何对应”，而不是“这些能力都还未开始”。
+
+当前仍需明确的边界：
+
+- 训练执行本身仍由外部 Logits 系统负责，Web 当前展示的是 store-backed 训练资产血缘与人工复核控制面
+- 内建评测桥当前稳定支持的是基于对话样本的 offline eval；
+  更通用的 env / verifier 执行器仍属于后续扩展
 
 ## 阶段 1：数据与 Dashboard 打通
 

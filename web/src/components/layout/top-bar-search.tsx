@@ -77,7 +77,7 @@ export function TopBarSearch({ items }: TopBarSearchProps) {
               setOpen(false);
             }
           }}
-          placeholder="搜索会话 / run / slice / snapshot / scorecard"
+          placeholder="搜索会话 / 运行 / 切片 / 数据快照 / 评分卡"
           value={query}
         />
       </div>

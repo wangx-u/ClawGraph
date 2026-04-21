@@ -15,6 +15,7 @@ from clawgraph.protocol.models import (
     PromotionDecisionRecord,
     ScorecardRecord,
     SliceRecord,
+    TrainingAssetRecord,
 )
 
 _LEGACY_BODY_REF_ENCODINGS = {"gzip", None}
@@ -28,6 +29,12 @@ _SUPPORTED_SCORECARD_VERDICTS = {"pass", "hold", "fail"}
 _SUPPORTED_PROMOTION_STAGES = {"offline", "shadow", "canary", "rollout"}
 _SUPPORTED_PROMOTION_DECISIONS = {"promote", "hold", "rollback"}
 _SUPPORTED_FEEDBACK_STATUSES = {"queued", "reviewed", "resolved"}
+_SUPPORTED_TRAINING_ASSET_KINDS = {
+    "logits_training_request",
+    "logits_model_candidate",
+    "logits_eval_execution",
+    "logits_router_handoff",
+}
 
 
 def validate_fact_event(fact: FactEvent) -> None:
@@ -291,6 +298,38 @@ def validate_promotion_decision_record(decision: PromotionDecisionRecord) -> Non
         _require_non_empty_string(condition, label=f"rollback_conditions[{index}]")
     if not isinstance(decision.metadata, dict):
         raise ValueError("promotion decision metadata must be a JSON object")
+
+
+def validate_training_asset_record(asset: TrainingAssetRecord) -> None:
+    """Validate one persisted training asset record before it is written."""
+
+    _require_non_empty_string(asset.asset_id, label="asset_id")
+    _require_non_empty_string(asset.schema_version, label="schema_version")
+    _require_non_empty_string(asset.asset_kind, label="asset_kind")
+    _require_non_empty_string(asset.title, label="title")
+    _require_non_empty_string(asset.status, label="status")
+    if asset.asset_kind not in _SUPPORTED_TRAINING_ASSET_KINDS:
+        raise ValueError(
+            "training asset kind must be one of "
+            + ", ".join(sorted(_SUPPORTED_TRAINING_ASSET_KINDS))
+        )
+    for label, value in (
+        ("training_request_id", asset.training_request_id),
+        ("candidate_model_id", asset.candidate_model_id),
+        ("eval_suite_id", asset.eval_suite_id),
+        ("dataset_snapshot_id", asset.dataset_snapshot_id),
+        ("scorecard_id", asset.scorecard_id),
+        ("promotion_decision_id", asset.promotion_decision_id),
+        ("slice_id", asset.slice_id),
+        ("manifest_path", asset.manifest_path),
+    ):
+        if value is None:
+            continue
+        _require_non_empty_string(value, label=label)
+    if not isinstance(asset.manifest, dict):
+        raise ValueError("training asset manifest must be a JSON object")
+    if not isinstance(asset.metadata, dict):
+        raise ValueError("training asset metadata must be a JSON object")
 
 
 def validate_feedback_queue_record(feedback: FeedbackQueueRecord) -> None:

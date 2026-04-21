@@ -14,6 +14,7 @@ from clawgraph.curation import freeze_cohort
 from clawgraph.evaluation import create_eval_suite_from_cohort
 from clawgraph.export import export_dataset
 from clawgraph.integrations.logits import (
+    build_training_registry,
     create_router_handoff_manifest,
     evaluate_candidate_on_suite,
     export_preference_snapshot_for_logits,
@@ -278,6 +279,7 @@ class LogitsIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(request.recipe_family, "sft")
             self.assertTrue(Path(request.input_path or "").exists())
+            self.assertEqual(len(SQLiteFactStore(store_uri).list_training_assets(asset_kind="logits_training_request")), 1)
 
             pref_store_uri, pref_snapshot_id = self._seed_preference_snapshot(tempdir)
             pref_summary = export_preference_snapshot_for_logits(
@@ -301,6 +303,7 @@ class LogitsIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(dpo_request.recipe_family, "dpo")
             self.assertTrue(Path(dpo_request.input_path or "").exists())
+            self.assertEqual(len(SQLiteFactStore(pref_store_uri).list_training_assets(asset_kind="logits_training_request")), 1)
 
             rl_request = prepare_rl_training_request(
                 output_dir=Path(tempdir) / "rl-out",
@@ -327,6 +330,7 @@ class LogitsIntegrationTest(unittest.TestCase):
             )
             candidate = submit_training_request(
                 request,
+                store_uri=store_uri,
                 candidate_path=Path(tempdir) / "candidate.json",
                 executor=lambda manifest: {
                     "candidate_model": "small-v1",
@@ -336,6 +340,9 @@ class LogitsIntegrationTest(unittest.TestCase):
                 },
             )
             self.assertEqual(candidate.sampler_path, "logits://sampler/small-v1")
+            store = SQLiteFactStore(store_uri)
+            self.assertEqual(len(store.list_training_assets(asset_kind="logits_training_request")), 1)
+            self.assertEqual(len(store.list_training_assets(asset_kind="logits_model_candidate")), 1)
 
             def fake_sample(model_descriptor: dict[str, str], case) -> dict[str, float | str]:
                 if model_descriptor["label"] == "candidate":
@@ -355,6 +362,7 @@ class LogitsIntegrationTest(unittest.TestCase):
             self.assertEqual(scorecard.verdict, "pass")
             self.assertIsNotNone(promotion)
             self.assertEqual(promotion.decision, "promote")
+            self.assertEqual(len(store.list_training_assets(asset_kind="logits_eval_execution")), 1)
 
             handoff = create_router_handoff_manifest(
                 store_uri=store_uri,
@@ -364,6 +372,7 @@ class LogitsIntegrationTest(unittest.TestCase):
             )
             self.assertIsInstance(handoff, RouterHandoffManifest)
             self.assertEqual(handoff.route_config["fallback"]["target_model"], "large-v1")
+            self.assertEqual(len(store.list_training_assets(asset_kind="logits_router_handoff")), 1)
 
     def test_cli_logit_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -409,6 +418,8 @@ class LogitsIntegrationTest(unittest.TestCase):
                     "clawgraph",
                     "logits",
                     "submit",
+                    "--store",
+                    store_uri,
                     "--manifest",
                     str(request_path),
                     "--candidate-out",
@@ -485,9 +496,50 @@ class LogitsIntegrationTest(unittest.TestCase):
             handoff_payload = json.loads(buffer.getvalue())
             self.assertEqual(handoff_payload["decision"], "promote")
 
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                ["clawgraph", "logits", "doctor", "--json"],
+            ), redirect_stdout(buffer):
+                return_code = main()
+            self.assertEqual(return_code, 0)
+            doctor_payload = json.loads(buffer.getvalue())
+            self.assertIn("modules", doctor_payload)
+            self.assertTrue(any(item["module"] == "logits" for item in doctor_payload["modules"]))
+
+            manifest_dir = Path(tempdir) / "registry"
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+            save_manifest(load_manifest(request_path), manifest_dir / "request.json")
+            save_manifest(load_manifest(candidate_path), manifest_dir / "candidate.json")
+            save_manifest(load_manifest(eval_output), manifest_dir / "execution.json")
+            save_manifest(load_manifest(handoff_output), manifest_dir / "handoff.json")
+
+            registry = build_training_registry(manifest_dir=None, store_uri=store_uri)
+            self.assertEqual(registry["summary"]["requestCount"], 1)
+            self.assertEqual(registry["training_requests"][0]["candidateCount"], 1)
+            self.assertEqual(registry["model_candidates"][0]["evalExecutionIds"], [eval_payload["eval_execution"]["eval_execution_id"]])
+
+            buffer = StringIO()
+            with patch(
+                "sys.argv",
+                [
+                    "clawgraph",
+                    "logits",
+                    "registry",
+                    "--manifest-dir",
+                    str(manifest_dir),
+                    "--store",
+                    store_uri,
+                    "--json",
+                ],
+            ), redirect_stdout(buffer):
+                return_code = main()
+            self.assertEqual(return_code, 0)
+            registry_payload = json.loads(buffer.getvalue())
+            self.assertEqual(registry_payload["summary"]["handoffCount"], 1)
+
 
 class _FakeRLDatasetBuilder:
     def __init__(self, batch_size: int = 1, **kwargs) -> None:
         self.batch_size = batch_size
         self.kwargs = kwargs
-

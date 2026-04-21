@@ -81,10 +81,14 @@ ClawGraph 不负责：
   定义离线、golden、shadow、canary、回滚和回流机制。
 - [ClawGraph 与 Logits 的训练、评测、替代集成方案](./logits_training_integration.zh-CN.md)
   定义怎样把 dataset snapshot 接到外部训练系统，并把 checkpoint 评测、promotion 和路由交接做成完整闭环。
+- [长链路框架优化方案](./long_trajectory_optimization_plan.zh-CN.md)
+  基于 `agent-diff` 复杂 agent run 的真实样本，定义 episode、branch、export、review 和后台编排的下一轮框架优化重点。
 - [面向用户的 Dashboard 产品设计](./user_dashboard_prd.zh-CN.md)
   定义如何把以上分层能力组织成一套面向平台、训练、评估、PM 和 BD 的控制面板。
 - [Dashboard 页面线框与交互流拆解](./user_dashboard_wireframes.zh-CN.md)
   继续拆解 Dashboard 的全局 shell、页面线框、对象详情模板和核心任务流。
+- [Dashboard UI 产品化 Review 与改造 TODO](./dashboard_ui_productization_review.zh-CN.md)
+  记录当前 Web 在流程清晰度、术语统一、上线接替表达上的问题，并拆成后续 UI 改造清单。
 
 ## 推荐实施顺序
 
@@ -104,15 +108,18 @@ ClawGraph 不负责：
 - artifact bootstrap
 - `sft` / `preference` / `binary_rl` builder
 - readiness 和 export
+- eval suite / scorecard / promotion decision
+- Logits 训练请求、候选模型、评测执行和 router handoff 的桥接层
+- Web 侧的数据治理面板，以及训练资产只读控制面
 
 这些能力足以支撑 evidence layer 和单 run 导出。
 
 仍需补齐的设计空白是：
 
-- 会话到切片的治理层
-- 多会话 cohort 的冻结逻辑
-- 训练集与评测集的边界
-- slice coverage 和 rollout policy
+- 真正持久化的 training registry，而不是仅依赖 manifest 扫描
+- router / serving 对 promotion decision 的执行回执
+- 独立的 coverage policy / route policy source-of-truth
+- env-based RL 与更通用的 verifier-driven 评测执行器
 
 ## 约束等级
 

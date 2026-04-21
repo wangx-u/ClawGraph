@@ -17,6 +17,28 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 
+type GateState = "pass" | "attention" | "blocked";
+
+function gateTone(state: GateState) {
+  if (state === "pass") {
+    return "success";
+  }
+  if (state === "attention") {
+    return "warning";
+  }
+  return "danger";
+}
+
+function gateLabel(state: GateState) {
+  if (state === "pass") {
+    return "通过";
+  }
+  if (state === "attention") {
+    return "待处理";
+  }
+  return "阻塞";
+}
+
 export default async function ReplayPage({
   params
 }: {
@@ -46,6 +68,76 @@ export default async function ReplayPage({
   const runBlockers = run.readinessBlockers ?? run.blockers ?? [];
   const timelineSteps: ReplayStep[] =
     replay.timelineSteps ?? replay.timeline.map((label) => ({ label }));
+  const declaredBranchCount = replay.branches.filter((branch) => branch.source === "declared").length;
+  const inferredBranchCount = replay.branches.length - declaredBranchCount;
+  const requestClosureState: GateState = run.openCount === 0 ? "pass" : "blocked";
+  const trajectoryState: GateState =
+    run.declaredRatio >= 0.75 ? "pass" : run.declaredRatio >= 0.5 ? "attention" : "blocked";
+  const semanticState: GateState =
+    run.evidenceLevel === "E2" ? "pass" : run.evidenceLevel === "E1" ? "attention" : "blocked";
+  const judgeState: GateState =
+    run.reviewStatus === "clean" || run.reviewStatus === "human"
+      ? "pass"
+      : run.reviewStatus === "review"
+        ? "attention"
+        : "blocked";
+  const datasetEligibilityState: GateState =
+    builderBadges.length && !runBlockers.length && requestClosureState === "pass" && trajectoryState !== "blocked" && semanticState !== "blocked" && judgeState !== "blocked"
+      ? "pass"
+      : builderBadges.length || runBlockers.length
+        ? "attention"
+        : "blocked";
+  const canEnterDataset = datasetEligibilityState === "pass";
+  const gateChecks = [
+    {
+      label: "请求闭环",
+      state: requestClosureState,
+      detail:
+        run.openCount === 0
+          ? `全部 ${replay.requests.length} 个请求已闭合，可以进入后续判断。`
+          : `${run.openCount} 个 open span 仍未闭合，先补齐执行终态。`
+    },
+    {
+      label: "轨迹结构",
+      state: trajectoryState,
+      detail:
+        run.declaredRatio >= 0.75
+          ? `显式轨迹覆盖 ${Math.round(run.declaredRatio * 100)}%，结构可信。`
+          : `显式轨迹覆盖 ${Math.round(run.declaredRatio * 100)}%，其中 ${inferredBranchCount} 个分支仍依赖推断。`
+    },
+    {
+      label: "语义证据",
+      state: semanticState,
+      detail:
+        run.evidenceLevel === "E2"
+          ? `已达到 ${evidenceLabel(run.evidenceLevel)}，${artifactCount} 条判断记录足够支持后续筛选。`
+          : run.evidenceLevel === "E1"
+            ? `当前只有 ${evidenceLabel(run.evidenceLevel)}，仍建议补更多关键语义。`
+            : `当前只有 ${evidenceLabel(run.evidenceLevel)}，还不能稳定进入候选池。`
+    },
+    {
+      label: "自动判断",
+      state: judgeState,
+      detail:
+        run.reviewStatus === "clean" || run.reviewStatus === "human"
+          ? `当前复核状态为 ${run.reviewStatus === "human" ? "已人工确认" : "已通过自动检查"}。`
+          : run.reviewReasons?.length
+            ? `当前仍需处理：${run.reviewReasons.slice(0, 2).join("、")}。`
+            : "自动判断已发现风险，仍需补充确认。"
+    },
+    {
+      label: "数据集准入",
+      state: datasetEligibilityState,
+      detail: canEnterDataset
+        ? `已匹配 ${builderBadges.join("、")}，可继续进入数据批次 / 数据快照。`
+        : builderBadges.length
+          ? `已有 builder 候选，但仍受以下条件影响：${runBlockers.slice(0, 2).join("、") || "还需复核当前判断结果"}。`
+          : "当前没有可用 builder，先补齐标签、判断或人工复核。"
+    }
+  ];
+  const primaryGateMessage = canEnterDataset
+    ? "这条运行已经满足数据集生产的准入条件。"
+    : "这条运行还不能直接进入数据集生产，需要先处理下面的 gate。";
 
   return (
     <div className="space-y-6">
@@ -53,8 +145,63 @@ export default async function ReplayPage({
         title={replay.title ? `回放 ${replay.title}` : `回放 ${shortId(replay.runId)}`}
         description="按执行顺序还原一个真实运行的请求、分支和语义事件，用于判断它现在卡在哪一步，以及下一步要补什么。"
         primaryAction={<Button href={`/sessions/${session.id}`} variant="primary">返回会话</Button>}
-        secondaryAction={<Button href="/supervision" variant="secondary">进入数据准备</Button>}
+        secondaryAction={
+          <Button href={canEnterDataset ? "/datasets" : "/supervision"} variant="secondary">
+            {canEnterDataset ? "进入数据集" : "进入自动判断"}
+          </Button>
+        }
       />
+
+      <Card
+        action={
+          <Button href={canEnterDataset ? "/datasets" : "/supervision"} variant="primary">
+            {canEnterDataset ? "继续数据集生产" : "先处理 Gate"}
+          </Button>
+        }
+        eyebrow="Trajectory Gate"
+        title={canEnterDataset ? "已满足数据集准入" : "尚未满足数据集准入"}
+        strong
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={canEnterDataset ? "success" : "warning"}>
+            {canEnterDataset ? "可进入数据集" : "仍有阻塞"}
+          </Badge>
+          <Badge tone={workflowStageTone(run.stage)}>{run.stageLabel ?? evidenceLabel(run.evidenceLevel)}</Badge>
+          <Badge tone={outcomeTone(run.outcome)}>{outcomeLabel(run.outcome)}</Badge>
+        </div>
+        <p className="mt-4 max-w-3xl text-sm leading-6 text-[color:var(--text-muted)]">{primaryGateMessage}</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {gateChecks.map((check) => (
+            <div className="panel-soft rounded-[1.1rem] p-4" key={check.label}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="text-sm font-medium">{check.label}</div>
+                <Badge tone={gateTone(check.state)}>{gateLabel(check.state)}</Badge>
+              </div>
+              <div className="mt-3 text-sm leading-6 text-[color:var(--text-muted)]">{check.detail}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+            当前阶段：{run.stageLabel ?? evidenceLabel(run.evidenceLevel)}。{run.stageDetail ?? "先确认这次运行是否已经具备稳定标签。"}
+          </div>
+          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+            可用 Builder：{builderBadges.length ? builderBadges.join("、") : "暂时没有，需要继续补监督。"}
+          </div>
+          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
+            下一步：{run.nextAction ?? "回到补标签或样本治理页面继续处理。"}
+          </div>
+        </div>
+        {runBlockers.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {runBlockers.slice(0, 4).map((item) => (
+              <Badge key={item} tone="warning">
+                {item}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
+      </Card>
 
       <Card eyebrow="回放摘要" title={replay.title ?? run.title ?? shortId(replay.runId)} strong>
         <div className="grid gap-3 md:grid-cols-4">
@@ -130,29 +277,6 @@ export default async function ReplayPage({
           />
         </Card>
       </div>
-
-      <Card eyebrow="治理面板" title="这次运行接下来怎么处理">
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
-            当前阶段：{run.stageLabel ?? evidenceLabel(run.evidenceLevel)}。{run.stageDetail ?? "先确认这次运行是否已经具备稳定标签。"}
-          </div>
-          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
-            可用 Builder：{builderBadges.length ? builderBadges.join("、") : "暂时没有，需要继续补监督。"}
-          </div>
-          <div className="panel-soft rounded-2xl p-4 text-sm text-[color:var(--text-muted)]">
-            下一步：{run.nextAction ?? "回到补标签或样本治理页面继续处理。"}
-          </div>
-        </div>
-        {runBlockers.length ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {runBlockers.slice(0, 4).map((item) => (
-              <Badge key={item} tone="warning">
-                {item}
-              </Badge>
-            ))}
-          </div>
-        ) : null}
-      </Card>
     </div>
   );
 }

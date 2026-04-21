@@ -16,7 +16,7 @@ export default async function SliceRegistryPage() {
     <div className="space-y-6">
       <PageHeader
         title="策展 / 切片注册表"
-        description="先定义稳定的任务切片，再去冻结 cohort、导出快照或做替代决策，避免后续口径漂移。"
+        description="先定义稳定的任务切片，再去冻结训练批次、导出数据快照或做替代决策，避免后续口径漂移。"
         primaryAction={<Button href="/curation/candidates" variant="primary">查看候选池</Button>}
         secondaryAction={<Button href="/datasets" variant="secondary">打开数据集</Button>}
       />

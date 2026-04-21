@@ -22,35 +22,42 @@ function getRailContent(pathname: string) {
   if (pathname.startsWith("/supervision")) {
     return {
       title: "数据准备建议",
-      points: ["先补基础任务标签和 verifier", "优先写 versioned artifact，而不是临时裸标签", "让自动判断和人工 override 都可追溯"],
+      points: ["先补基础任务标签和 verifier", "优先写可追溯的判断记录，而不是临时裸标签", "让自动判断和人工覆盖都能回查来源"],
       cta: { label: "打开数据集流程", href: "/flows/build-dataset" }
     };
   }
   if (pathname.startsWith("/curation")) {
     return {
       title: "数据筛选标准",
-      points: ["冻结前先清空低置信样本", "严格遵守 cluster 配额和 holdout", "训练 cohort 和评测 cohort 必须分开冻结"],
+      points: ["冻结前先清空低置信样本", "严格遵守切片配额和保留集规则", "训练批次和评测批次必须分开冻结"],
       cta: { label: "前往数据集", href: "/datasets" }
     };
   }
   if (pathname.startsWith("/datasets")) {
     return {
       title: "导出指引",
-      points: ["正式写出 JSONL 前先做 dry-run", "看到 blocker 就直接回到上游处理", "把 manifest 和 snapshot 当成正式资产维护"],
+      points: ["正式写出 JSONL 前先做 dry-run", "看到 blocker 就直接回到上游处理", "把导出清单和数据快照当成正式资产维护"],
       cta: { label: "验证切片替代", href: "/flows/validate-slice" }
+    };
+  }
+  if (pathname.startsWith("/training")) {
+    return {
+      title: "模型接替纪律",
+      points: ["候选一旦产出，就尽快送进固定评测", "评测完成后必须形成保留、放量或回退决策", "交接包就绪后立刻进入上线控制面，确认审批和 router ack"],
+      cta: { label: "打开上线控制面", href: "/coverage" }
     };
   }
   if (pathname.startsWith("/evaluation") || pathname.startsWith("/coverage")) {
     return {
-      title: "替代纪律",
-      points: ["所有结论必须按 slice 成立，不能只看全局平均", "rollback 条件必须明确写出", "所有回归都应进入 feedback 闭环"],
+      title: "上线守则",
+      points: ["切流范围和流量比例要明确锁定", "审批人、router ack 和监控来源缺一不可", "所有 rollback 条件都必须绑定值班责任人和回流闭环"],
       cta: { label: "查看回流队列", href: "/feedback" }
     };
   }
   return {
-    title: "控制台引导",
-    points: ["先确认真实流量，再做数据准备和监督", "训练数据导出前必须经过筛选和复核", "评测和回流共同构成完整闭环"],
-    cta: { label: "开始引导流程", href: "/flows/connect-runtime" }
+    title: "使用建议",
+    points: ["先验证真实流量和数据闭环，再扩展训练与替代流程", "优先围绕当前阻塞和下一步动作推进，而不是同时展开所有模块", "训练执行由外部系统负责，ClawGraph 负责数据、评测和替代建议"],
+    cta: { label: "打开上手流程", href: "/flows/connect-runtime" }
   };
 }
 
@@ -59,7 +66,7 @@ export function RightRail() {
   const content = getRailContent(pathname);
 
   return (
-    <aside className="hidden w-[320px] shrink-0 2xl:block">
+    <aside className="hidden w-[300px] shrink-0 xl:block 2xl:w-[320px]">
       <div className="sticky top-4 space-y-4">
         <Card eyebrow="上下文侧栏" title={content.title} strong>
           <div className="space-y-3">

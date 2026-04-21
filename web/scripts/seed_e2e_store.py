@@ -19,9 +19,17 @@ from clawgraph.protocol.factories import (  # noqa: E402
     new_eval_suite_record,
     new_fact_event,
     new_feedback_queue_record,
+    new_promotion_decision_record,
     new_scorecard_record,
     new_semantic_event_fact,
     new_slice_record,
+)
+from clawgraph.integrations.logits import save_manifest  # noqa: E402
+from clawgraph.integrations.logits.manifests import (  # noqa: E402
+    EvalExecutionManifest,
+    ModelCandidateManifest,
+    RouterHandoffManifest,
+    TrainingRequestManifest,
 )
 from clawgraph.store import SQLiteFactStore  # noqa: E402
 
@@ -29,6 +37,7 @@ from clawgraph.store import SQLiteFactStore  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--store", required=True)
+    parser.add_argument("--manifest-dir")
     return parser.parse_args()
 
 
@@ -350,6 +359,18 @@ def main() -> int:
         metadata={"summary": "seeded benchmark pass"},
     )
     store.append_scorecard(scorecard)
+    promotion = new_promotion_decision_record(
+        promotion_decision_id="decision_e2e_canary",
+        slice_id=slice_record.slice_id,
+        scorecard_id=scorecard.scorecard_id,
+        stage="canary",
+        decision="promote",
+        coverage_policy_version="coverage.seed.v1",
+        summary="seeded benchmark promotion decision",
+        rollback_conditions=["verifier_pass_rate_drop > 0.03", "fallback_rate > 0.10"],
+        metadata={"seed": True},
+    )
+    store.append_promotion_decision(promotion)
 
     feedback = new_feedback_queue_record(
         feedback_id="fb_e2e_review",
@@ -363,6 +384,13 @@ def main() -> int:
         },
     )
     store.append_feedback_queue_item(feedback)
+    if args.manifest_dir:
+        _seed_training_manifests(
+            manifest_dir=Path(args.manifest_dir),
+            dataset_snapshot_id=snapshot.dataset_snapshot_id,
+            eval_suite_id=suite.eval_suite_id,
+            slice_id=slice_record.slice_id,
+        )
     return 0
 
 
@@ -373,6 +401,95 @@ def _reset_sqlite_store(store_uri: str) -> None:
     db_path = Path(unquote(parsed.path))
     if db_path.exists():
         db_path.unlink()
+
+
+def _seed_training_manifests(
+    *,
+    manifest_dir: Path,
+    dataset_snapshot_id: str,
+    eval_suite_id: str,
+    slice_id: str,
+) -> None:
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    training_request = TrainingRequestManifest(
+        training_request_id="train_e2e_sft",
+        created_at="2026-04-16T09:30:00+00:00",
+        recipe_family="sft",
+        recipe_name="supervised.chat_sl",
+        base_model="mini-e2e-base",
+        dataset_snapshot_id=dataset_snapshot_id,
+        dataset_builder="sft",
+        input_path="/tmp/clawgraph-e2e/sft.jsonl",
+        eval_suite_id=eval_suite_id,
+        log_path="/tmp/clawgraph-e2e/logits/train_e2e_sft",
+        runtime_config={"executor_ref": "seed.executor"},
+        metadata={"seed": True},
+    )
+    candidate = ModelCandidateManifest(
+        candidate_model_id="cand_e2e_sft",
+        created_at="2026-04-16T10:10:00+00:00",
+        training_request_id=training_request.training_request_id,
+        recipe_family="sft",
+        training_recipe="supervised.chat_sl",
+        base_model=training_request.base_model,
+        dataset_snapshot_id=dataset_snapshot_id,
+        dataset_builder="sft",
+        candidate_model="mini-e2e",
+        checkpoint_path="/tmp/clawgraph-e2e/logits/checkpoints/mini-e2e",
+        sampler_path="/tmp/clawgraph-e2e/logits/samplers/mini-e2e",
+        published_model_path="logits://mini-e2e",
+        log_path=training_request.log_path,
+        metadata={"seed": True},
+    )
+    execution = EvalExecutionManifest(
+        eval_execution_id="evalexec_e2e_sft",
+        created_at="2026-04-16T10:40:00+00:00",
+        eval_suite_id=eval_suite_id,
+        candidate_model_id=candidate.candidate_model_id,
+        candidate_model=candidate.candidate_model or "mini-e2e",
+        candidate_model_path=candidate.published_model_path,
+        baseline_model="teacher-e2e",
+        baseline_model_path="logits://teacher-e2e",
+        grader_name="benchmark-grader",
+        case_count=1,
+        scorecard_id="score_e2e_offline",
+        promotion_decision_id="decision_e2e_canary",
+        metrics={"task_success_rate": 1.0, "verifier_pass_rate": 1.0},
+        thresholds={"task_success_rate": {"op": "gte", "value": 0.8}},
+        metadata={"seed": True},
+    )
+    handoff = RouterHandoffManifest(
+        handoff_id="handoff_e2e_sft",
+        created_at="2026-04-16T10:55:00+00:00",
+        promotion_decision_id="decision_e2e_canary",
+        scorecard_id="score_e2e_offline",
+        candidate_model_id=candidate.candidate_model_id,
+        candidate_model=candidate.candidate_model or "mini-e2e",
+        candidate_model_path=candidate.published_model_path,
+        slice_id=slice_id,
+        stage="canary",
+        decision="promote",
+        coverage_policy_version="coverage.seed.v1",
+        route_config={
+            "slice_id": slice_id,
+            "route_mode": "canary",
+            "candidate_model": candidate.candidate_model or "mini-e2e",
+            "candidate_model_path": candidate.published_model_path,
+            "baseline_model": "teacher-e2e",
+            "fallback": {
+                "target_model": "teacher-e2e",
+                "conditions": ["verifier_pass_rate_drop > 0.03", "fallback_rate > 0.10"],
+            },
+        },
+        rollback_conditions=["verifier_pass_rate_drop > 0.03", "fallback_rate > 0.10"],
+        metadata={"seed": True},
+    )
+
+    save_manifest(training_request, manifest_dir / "training_request.e2e.json")
+    save_manifest(candidate, manifest_dir / "candidate.e2e.json")
+    save_manifest(execution, manifest_dir / "eval_execution.e2e.json")
+    save_manifest(handoff, manifest_dir / "router_handoff.e2e.json")
 
 
 if __name__ == "__main__":

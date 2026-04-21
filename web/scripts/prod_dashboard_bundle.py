@@ -17,6 +17,7 @@ from clawgraph.dashboard_bundle import build_web_dashboard_bundle, normalize_sto
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--store", required=True)
+    parser.add_argument("--manifest-dir")
     parser.add_argument("--session-limit", type=int, default=12)
     parser.add_argument("--run-limit", type=int, default=24)
     parser.add_argument("--artifact-limit", type=int, default=40)
@@ -27,6 +28,7 @@ def main() -> int:
     args = parse_args()
     bundle = build_web_dashboard_bundle(
         store_uri=normalize_store_uri(args.store),
+        manifest_dir=args.manifest_dir,
         session_limit=args.session_limit,
         run_limit=args.run_limit,
         artifact_limit=args.artifact_limit,

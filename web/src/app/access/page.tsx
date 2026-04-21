@@ -20,7 +20,7 @@ export default async function AccessPage() {
     <div className="space-y-6">
       <PageHeader
         title="接入"
-        description="先让 agent 或 benchmark 的 LLM 请求走 ClawGraph proxy，再确认第一条真实运行已经可见、可回放、可继续治理。"
+        description="先让 agent 或 benchmark 的 LLM 请求走 ClawGraph proxy，再确认第一条真实运行已经可见、可回放，并且足以进入后续数据与验证闭环。"
         primaryAction={<Button href="/flows/connect-runtime" variant="primary">打开接入流程</Button>}
         secondaryAction={<Button href="/sessions" variant="secondary">查看最近运行</Button>}
       />

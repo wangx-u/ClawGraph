@@ -617,6 +617,27 @@ slice-specific env + verifier
 - 至少一个高价值 slice 能完成端到端 RL 实验
 - RL 候选模型的表现以统一 scorecard 展示
 
+### 当前实现边界说明（2026-04）
+
+到当前代码版本，`Logits x ClawGraph` 已经具备：
+
+- `dataset snapshot -> training request manifest`
+- `training request -> model candidate manifest`
+- `candidate -> eval execution / scorecard / promotion`
+- `promotion -> router handoff manifest`
+- store-backed training registry，并兼容 manifest 导入，可被 Web 详情页和 CLI 统一读取
+
+但内建评测桥当前稳定支持的是：
+
+- 基于 `sft` 风格对话样本的 offline eval
+
+因此，本文中对 “统一 DPO / RL 候选评测” 的描述应理解为目标架构，而不是当前已经完全实现的能力。
+在没有 slice-specific env / verifier 之前：
+
+- `preference` 可以进入训练桥，但评测通常仍需回到离线对话比较或外部 grader
+- `binary_rl` 不应被误解为可直接替代 env-based RL 的线上训练输入
+- 真正的 env / verifier-driven RL 评测仍需要 Phase 5 单独建设
+
 ## 9. 测试矩阵
 
 ### 9.1 单元测试

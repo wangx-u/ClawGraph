@@ -26,8 +26,7 @@ export async function markFeedbackReviewed(formData: FormData) {
   await resolveFeedbackInStore({
     feedbackId,
     status: "reviewed",
-    note: "已在 Dashboard 中人工确认。",
-    reviewer: "dashboard"
+    note: "已在 Dashboard 中人工确认。"
   });
   revalidateDashboardViews();
 }
@@ -40,8 +39,7 @@ export async function resolveFeedback(formData: FormData) {
   await resolveFeedbackInStore({
     feedbackId,
     status: "resolved",
-    note: "已在 Dashboard 中关闭回流项。",
-    reviewer: "dashboard"
+    note: "已在 Dashboard 中关闭回流项。"
   });
   revalidateDashboardViews();
 }
@@ -57,8 +55,7 @@ export async function confirmRunByHuman(formData: FormData) {
     sessionId,
     runId,
     feedbackId,
-    reviewNote: "已在 Dashboard 中人工确认，可进入数据集或验证流程。",
-    reviewer: "dashboard"
+    reviewNote: "已在 Dashboard 中人工确认，可进入数据集或验证流程。"
   });
   revalidateDashboardViews();
 }

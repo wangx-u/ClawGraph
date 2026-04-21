@@ -20,6 +20,13 @@ from clawgraph.evaluation import (
     record_scorecard,
 )
 from clawgraph.export import export_dataset
+from clawgraph.integrations.logits.manifests import (
+    EvalExecutionManifest,
+    ModelCandidateManifest,
+    RouterHandoffManifest,
+    TrainingRequestManifest,
+    save_manifest,
+)
 from clawgraph.protocol.factories import (
     new_artifact_record,
     new_fact_event,
@@ -139,9 +146,60 @@ class DashboardSnapshotTest(unittest.TestCase):
     def test_build_web_dashboard_bundle_aligns_with_snapshot_levels(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             store_uri = f"sqlite:///{Path(tempdir) / 'facts.db'}"
-            self._seed_dashboard_store(store_uri=store_uri, tempdir=Path(tempdir))
+            store = self._seed_dashboard_store(store_uri=store_uri, tempdir=Path(tempdir))
+            manifest_dir = Path(tempdir) / "manifests"
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+            snapshot = store.list_dataset_snapshots()[0]
+            suite = store.list_eval_suites()[0]
+            scorecard = store.list_scorecards()[0]
+            decision = store.list_promotion_decisions()[0]
+            request = TrainingRequestManifest(
+                recipe_family="sft",
+                recipe_name="supervised.chat_sl",
+                base_model="meta-llama/Llama-3.2-1B-Instruct",
+                dataset_snapshot_id=snapshot.dataset_snapshot_id,
+                log_path=str(manifest_dir / "runs" / "capture-sft"),
+            )
+            candidate = ModelCandidateManifest(
+                training_request_id=request.training_request_id,
+                recipe_family="sft",
+                training_recipe=request.recipe_name,
+                base_model=request.base_model,
+                dataset_snapshot_id=snapshot.dataset_snapshot_id,
+                candidate_model="capture-small-v1",
+                checkpoint_path="logits://checkpoint/capture-small-v1",
+                sampler_path="logits://sampler/capture-small-v1",
+            )
+            execution = EvalExecutionManifest(
+                eval_suite_id=suite.eval_suite_id,
+                candidate_model_id=candidate.candidate_model_id,
+                candidate_model=candidate.candidate_model or candidate.candidate_model_id,
+                baseline_model="large-v1",
+                case_count=1,
+                scorecard_id=scorecard.scorecard_id,
+                promotion_decision_id=decision.promotion_decision_id,
+            )
+            handoff = RouterHandoffManifest(
+                promotion_decision_id=decision.promotion_decision_id,
+                scorecard_id=scorecard.scorecard_id,
+                candidate_model_id=candidate.candidate_model_id,
+                candidate_model=candidate.candidate_model or candidate.candidate_model_id,
+                slice_id="slice.capture",
+                stage="offline",
+                decision="promote",
+                coverage_policy_version="coverage.v1",
+            )
+            save_manifest(request, manifest_dir / "request.json")
+            save_manifest(candidate, manifest_dir / "candidate.json")
+            save_manifest(execution, manifest_dir / "execution.json")
+            save_manifest(handoff, manifest_dir / "handoff.json")
 
-            bundle = build_web_dashboard_bundle(store_uri=store_uri, session_limit=10, run_limit=10)
+            bundle = build_web_dashboard_bundle(
+                store_uri=store_uri,
+                manifest_dir=str(manifest_dir),
+                session_limit=10,
+                run_limit=10,
+            )
 
             metrics = {item["label"]: item for item in bundle["overviewMetrics"]}
             sessions = {item["id"]: item for item in bundle["sessions"]}
@@ -178,6 +236,15 @@ class DashboardSnapshotTest(unittest.TestCase):
             self.assertTrue(replay_records["run_1"]["requests"][0]["summary"])
             self.assertTrue(replay_records["run_1"]["branches"][0]["title"])
             self.assertTrue(replay_records["run_1"]["branches"][0]["summary"])
+            self.assertEqual(bundle["trainingRequests"][0]["recipeFamily"], "sft")
+            self.assertEqual(bundle["trainingRequests"][0]["candidateCount"], 1)
+            self.assertEqual(bundle["modelCandidates"][0]["candidateModel"], "capture-small-v1")
+            self.assertEqual(bundle["modelCandidates"][0]["evalExecutionIds"], [bundle["evalExecutions"][0]["id"]])
+            self.assertEqual(bundle["evalExecutions"][0]["evalSuiteId"], suite.eval_suite_id)
+            self.assertEqual(bundle["evalExecutions"][0]["scorecardVerdict"], "pass")
+            self.assertEqual(bundle["routerHandoffs"][0]["decision"], "promote")
+            self.assertEqual(bundle["trainingRegistrySummary"]["requestCount"], 1)
+            self.assertIn("verifier_pass_rate_drop", bundle["coverageGuardrails"])
 
     def test_inferred_only_branching_is_advisory_not_review_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

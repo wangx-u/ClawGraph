@@ -16,6 +16,7 @@ from clawgraph.protocol.models import (
     PromotionDecisionRecord,
     ScorecardRecord,
     SliceRecord,
+    TrainingAssetRecord,
 )
 from clawgraph.protocol.validation import (
     validate_artifact_record,
@@ -28,6 +29,7 @@ from clawgraph.protocol.validation import (
     validate_promotion_decision_record,
     validate_scorecard_record,
     validate_slice_record,
+    validate_training_asset_record,
 )
 
 
@@ -356,6 +358,47 @@ def new_promotion_decision_record(
         metadata=metadata or {},
     )
     validate_promotion_decision_record(record)
+    return record
+
+
+def new_training_asset_record(
+    *,
+    asset_id: str,
+    asset_kind: str,
+    title: str,
+    status: str,
+    manifest: dict,
+    training_request_id: str | None = None,
+    candidate_model_id: str | None = None,
+    eval_suite_id: str | None = None,
+    dataset_snapshot_id: str | None = None,
+    scorecard_id: str | None = None,
+    promotion_decision_id: str | None = None,
+    slice_id: str | None = None,
+    manifest_path: str | None = None,
+    metadata: dict | None = None,
+) -> TrainingAssetRecord:
+    """Create one persisted training asset record with standard defaults."""
+
+    record = TrainingAssetRecord(
+        asset_id=asset_id,
+        schema_version="v1",
+        asset_kind=asset_kind,
+        title=title,
+        status=status,
+        manifest=manifest,
+        created_at=datetime.now(UTC),
+        training_request_id=training_request_id,
+        candidate_model_id=candidate_model_id,
+        eval_suite_id=eval_suite_id,
+        dataset_snapshot_id=dataset_snapshot_id,
+        scorecard_id=scorecard_id,
+        promotion_decision_id=promotion_decision_id,
+        slice_id=slice_id,
+        manifest_path=manifest_path,
+        metadata=metadata or {},
+    )
+    validate_training_asset_record(record)
     return record
 
 

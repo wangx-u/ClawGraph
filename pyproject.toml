@@ -33,6 +33,15 @@ classifiers = [
 [project.scripts]
 clawgraph = "clawgraph.cli.main:main"
 
+[project.optional-dependencies]
+logits-runtime = [
+  "tinker>=0.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/wangx-u/agent-rl/tree/main/clawgraph"
+Repository = "https://github.com/wangx-u/agent-rl"
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 

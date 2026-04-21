@@ -10,7 +10,8 @@ const flowLinks: Record<string, { primary: string; secondary: string }> = {
   "investigate-failure": { primary: "/sessions", secondary: "/supervision" },
   "build-dataset": { primary: "/curation/candidates", secondary: "/datasets" },
   "validate-slice": { primary: "/coverage", secondary: "/evaluation" },
-  "review-feedback": { primary: "/feedback", secondary: "/curation/candidates" }
+  "review-feedback": { primary: "/feedback", secondary: "/curation/candidates" },
+  "operate-training": { primary: "/training", secondary: "/evaluation" }
 };
 
 export default async function FlowPage({
@@ -26,6 +27,9 @@ export default async function FlowPage({
   }
 
   const links = flowLinks[flow.id];
+  if (!links) {
+    notFound();
+  }
 
   return (
     <div className="space-y-6">

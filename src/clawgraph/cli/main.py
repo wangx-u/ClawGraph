@@ -12,6 +12,7 @@ from typing import Any
 from clawgraph.artifacts import plan_artifact_bootstrap
 from clawgraph.bootstrap import bootstrap_openclaw_session
 from clawgraph.curation import freeze_cohort, list_slice_candidates, preview_slice_review_queue
+from clawgraph.control_plane import ControlPlaneConfig, run_control_plane_server
 from clawgraph.dashboard import (
     build_dashboard_snapshot,
     inspect_run_workflow,
@@ -46,12 +47,15 @@ from clawgraph.graph import (
     render_session_replay,
 )
 from clawgraph.integrations.logits import (
+    build_training_registry,
     create_router_handoff_manifest,
+    describe_logits_runtime,
     evaluate_candidate_on_suite,
     load_manifest as load_logits_manifest,
     prepare_dpo_training_request,
     prepare_rl_training_request,
     prepare_sft_training_request,
+    render_training_registry,
     submit_training_request,
 )
 from clawgraph.integrations.logits.manifests import (
@@ -344,6 +348,26 @@ def _build_parser() -> argparse.ArgumentParser:
     proxy.add_argument("--max-stream-chunk-facts", type=int, default=32)
     proxy.add_argument("--disable-session-user-binding", action="store_true")
     proxy.add_argument("--payload-dir")
+
+    control_plane = subparsers.add_parser(
+        "control-plane",
+        help="Run the ClawGraph control-plane service",
+    )
+    control_plane_subparsers = control_plane.add_subparsers(dest="control_plane_command")
+
+    control_plane_serve = control_plane_subparsers.add_parser(
+        "serve",
+        help="Start the control-plane HTTP service",
+    )
+    control_plane_serve.add_argument("--store", default=DEFAULT_STORE_URI)
+    control_plane_serve.add_argument("--manifest-dir")
+    control_plane_serve.add_argument("--host", default="127.0.0.1")
+    control_plane_serve.add_argument("--port", type=int, default=8096)
+    control_plane_serve.add_argument("--auth-token")
+    control_plane_serve.add_argument("--actor", default="clawgraph.control_plane")
+    control_plane_serve.add_argument("--session-limit", type=int, default=12)
+    control_plane_serve.add_argument("--run-limit", type=int, default=24)
+    control_plane_serve.add_argument("--artifact-limit", type=int, default=40)
 
     payload = subparsers.add_parser("payload", help="Read or garbage-collect spilled payload sidecars")
     payload_subparsers = payload.add_subparsers(dest="payload_command")
@@ -825,6 +849,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     logits_subparsers = logits_parser.add_subparsers(dest="logits_command")
 
+    logits_doctor = logits_subparsers.add_parser(
+        "doctor",
+        help="Check whether Logits, Cookbook, and required runtime dependencies are importable",
+    )
+    logits_doctor.add_argument("--json", action="store_true")
+
+    logits_registry = logits_subparsers.add_parser(
+        "registry",
+        help="Inspect one manifest-backed training registry with lineage across requests, candidates, evals, and handoffs",
+    )
+    logits_registry.add_argument("--manifest-dir")
+    logits_registry.add_argument("--store", default=DEFAULT_STORE_URI)
+    logits_registry.add_argument("--json", action="store_true")
+
     logits_prepare_sft = logits_subparsers.add_parser(
         "prepare-sft",
         help="Adapt one SFT snapshot and emit a Logits training request manifest",
@@ -890,6 +928,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "prepare-rl",
         help="Emit a generic environment-driven Logits RL training request manifest",
     )
+    logits_prepare_rl.add_argument("--store")
     logits_prepare_rl.add_argument("--output-dir", type=Path, required=True)
     logits_prepare_rl.add_argument("--base-model", required=True)
     logits_prepare_rl.add_argument("--dataset-builder-ref", required=True)
@@ -915,6 +954,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "submit",
         help="Submit one Logits training request manifest and emit a candidate manifest",
     )
+    logits_submit.add_argument("--store")
     logits_submit.add_argument("--manifest", type=Path, required=True)
     logits_submit.add_argument("--executor-ref")
     logits_submit.add_argument("--candidate-out", type=Path)
@@ -980,6 +1020,24 @@ def main(argv: list[str] | None = None) -> int:
                 max_stream_chunk_facts=args.max_stream_chunk_facts,
                 enforce_session_user_binding=not args.disable_session_user_binding,
                 payload_dir=args.payload_dir,
+            )
+        )
+        return 0
+
+    if args.command == "control-plane" and args.control_plane_command == "serve":
+        auth_token = args.auth_token or os.getenv("CLAWGRAPH_CONTROL_PLANE_TOKEN")
+        actor = args.actor or os.getenv("CLAWGRAPH_CONTROL_PLANE_ACTOR", "clawgraph.control_plane")
+        run_control_plane_server(
+            ControlPlaneConfig(
+                host=args.host,
+                port=args.port,
+                store_uri=args.store,
+                manifest_dir=args.manifest_dir or os.getenv("CLAWGRAPH_TRAINING_MANIFEST_DIR"),
+                auth_token=auth_token,
+                actor=actor,
+                session_limit=args.session_limit,
+                run_limit=args.run_limit,
+                artifact_limit=args.artifact_limit,
             )
         )
         return 0
@@ -1916,6 +1974,42 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(str(exc)) from exc
         return 0
 
+    if args.command == "logits" and args.logits_command == "doctor":
+        payload = describe_logits_runtime()
+        _print_output(
+            payload
+            if args.json
+            else "\n".join(
+                [
+                    "Logits runtime:",
+                    (
+                        f"workspace_root={payload['workspace_root'] or '<none>'} "
+                        f"logits_src={payload['configured_logits_src'] or '<auto>'} "
+                        f"cookbook_src={payload['configured_cookbook_src'] or '<auto>'}"
+                    ),
+                    *[
+                        (
+                            f"- {module['module']}: "
+                            f"{'ok' if module['available'] else 'missing'} "
+                            f"({module['location'] or module['error'] or '-'})"
+                        )
+                        for module in payload["modules"]
+                    ],
+                ]
+            )
+        )
+        return 0
+
+    if args.command == "logits" and args.logits_command == "registry":
+        if not args.manifest_dir and not args.store:
+            raise SystemExit("registry requires --store or --manifest-dir")
+        payload = build_training_registry(
+            manifest_dir=args.manifest_dir,
+            store_uri=args.store,
+        )
+        _print_output(payload if args.json else render_training_registry(payload))
+        return 0
+
     if args.command == "logits" and args.logits_command == "prepare-dpo":
         try:
             manifest = prepare_dpo_training_request(
@@ -1957,6 +2051,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "logits" and args.logits_command == "prepare-rl":
         try:
             manifest = prepare_rl_training_request(
+                store_uri=args.store,
                 output_dir=args.output_dir,
                 base_model=args.base_model,
                 dataset_builder_ref=args.dataset_builder_ref,
@@ -1998,6 +2093,7 @@ def main(argv: list[str] | None = None) -> int:
                 loaded_manifest.runtime_config["executor_ref"] = args.executor_ref
             candidate = submit_training_request(
                 loaded_manifest,
+                store_uri=args.store,
                 candidate_path=args.candidate_out,
             )
             _print_output(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute dashboard mutations against a local ClawGraph store."""
+"""Execute dashboard and training mutations against a local ClawGraph store."""
 
 from __future__ import annotations
 
@@ -7,19 +7,22 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clawgraph.evaluation import update_feedback_queue_status  # noqa: E402
-from clawgraph.judge import plan_review_override  # noqa: E402
-from clawgraph.protocol.models import ArtifactRecord  # noqa: E402
-from clawgraph.store import SQLiteFactStore  # noqa: E402
+from clawgraph.control_plane.actions import (  # noqa: E402
+    create_handoff_action,
+    evaluate_candidate_action,
+    resolve_feedback_action,
+    review_override_action,
+    submit_training_request_action,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest-dir")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
     resolve = subparsers.add_parser("resolve-feedback")
@@ -41,122 +44,121 @@ def parse_args() -> argparse.Namespace:
     override.add_argument("--reviewer")
     override.add_argument("--quality-confidence", type=float, default=1.0)
     override.add_argument("--verifier-score", type=float, default=1.0)
+
+    submit = subparsers.add_parser("submit-training")
+    submit.add_argument("--store", required=True)
+    submit.add_argument("--request-id")
+    submit.add_argument("--manifest-path")
+    submit.add_argument("--executor-ref")
+    submit.add_argument("--candidate-out")
+
+    evaluate = subparsers.add_parser("evaluate-candidate")
+    evaluate.add_argument("--store", required=True)
+    evaluate.add_argument("--candidate-id")
+    evaluate.add_argument("--manifest-path")
+    evaluate.add_argument("--eval-suite-id")
+    evaluate.add_argument("--baseline-model")
+    evaluate.add_argument("--baseline-model-path")
+    evaluate.add_argument("--sample-ref")
+    evaluate.add_argument("--grader-name", default="exact-match")
+    evaluate.add_argument("--grader-ref")
+    evaluate.add_argument("--max-tokens", type=int, default=512)
+    evaluate.add_argument("--temperature", type=float, default=0.0)
+    evaluate.add_argument("--top-p", type=float, default=1.0)
+    evaluate.add_argument("--base-url")
+    evaluate.add_argument("--promotion-stage", default="offline")
+    evaluate.add_argument("--coverage-policy-version", default="logits.eval.v1")
+    evaluate.add_argument("--promotion-summary")
+    evaluate.add_argument("--output-path")
+
+    handoff = subparsers.add_parser("create-handoff")
+    handoff.add_argument("--store", required=True)
+    handoff.add_argument("--candidate-id")
+    handoff.add_argument("--manifest-path")
+    handoff.add_argument("--promotion-decision-id")
+    handoff.add_argument("--output-path")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     if args.action == "resolve-feedback":
-        payload = {
-            "action": args.action,
-            "items": [
-                item.to_dict()
-                for item in update_feedback_queue_status(
-                    store_uri=args.store,
-                    feedback_id=args.feedback_id,
-                    status=args.status,
-                    note=args.note,
-                    reviewer=args.reviewer,
-                )
-            ],
-        }
+        payload = resolve_feedback_action(
+            store_uri=args.store,
+            feedback_id=args.feedback_id,
+            status=args.status,
+            note=args.note,
+            reviewer=args.reviewer or "dashboard.local",
+        )
         sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         return 0
 
     if args.action == "review-override":
-        store = SQLiteFactStore(args.store)
-        facts = store.list_facts(session_id=args.session_id, run_id=args.run_id)
-        if not facts:
-            raise SystemExit(f"no facts found for {args.session_id}/{args.run_id}")
-        artifacts = store.list_artifacts(
+        payload = review_override_action(
+            store_uri=args.store,
             session_id=args.session_id,
             run_id=args.run_id,
-            latest_only=True,
-        )
-        plan = plan_review_override(
-            facts=facts,
-            artifacts=artifacts,
+            feedback_id=args.feedback_id,
+            feedback_status=args.feedback_status,
             producer=args.producer,
             version=args.version,
             review_note=args.review_note,
-            payload_patch={
-                "quality_confidence": args.quality_confidence,
-                "verifier_score": args.verifier_score,
-            },
+            reviewer=args.reviewer or "dashboard.local",
+            quality_confidence=args.quality_confidence,
+            verifier_score=args.verifier_score,
         )
-        persisted, skipped = _persist_unique_artifacts(
-            store=store,
-            session_id=args.session_id,
-            run_id=args.run_id,
-            artifacts=[plan.artifact],
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return 0
+
+    if args.action == "submit-training":
+        payload = submit_training_request_action(
+            store_uri=args.store,
+            manifest_dir=args.manifest_dir,
+            request_id=args.request_id,
+            manifest_path=args.manifest_path,
+            executor_ref=args.executor_ref,
+            candidate_out=args.candidate_out,
         )
-        feedback_items = []
-        if args.feedback_id:
-            feedback_items = [
-                item.to_dict()
-                for item in update_feedback_queue_status(
-                    store=store,
-                    feedback_id=args.feedback_id,
-                    status=args.feedback_status,
-                    note=args.review_note,
-                    reviewer=args.reviewer,
-                )
-            ]
-        payload = {
-            "action": args.action,
-            "persisted_count": len(persisted),
-            "skipped_duplicates": skipped,
-            "artifact_id": persisted[0].artifact_id if persisted else None,
-            "run_id": args.run_id,
-            "session_id": args.session_id,
-            "feedback_items": feedback_items,
-        }
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return 0
+
+    if args.action == "evaluate-candidate":
+        payload = evaluate_candidate_action(
+            store_uri=args.store,
+            manifest_dir=args.manifest_dir,
+            candidate_id=args.candidate_id,
+            manifest_path=args.manifest_path,
+            eval_suite_id=args.eval_suite_id,
+            baseline_model=args.baseline_model,
+            baseline_model_path=args.baseline_model_path,
+            sample_ref=args.sample_ref,
+            grader_name=args.grader_name,
+            grader_ref=args.grader_ref,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            base_url=args.base_url,
+            promotion_stage=args.promotion_stage,
+            coverage_policy_version=args.coverage_policy_version,
+            promotion_summary=args.promotion_summary,
+            output_path=args.output_path,
+        )
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return 0
+
+    if args.action == "create-handoff":
+        payload = create_handoff_action(
+            store_uri=args.store,
+            manifest_dir=args.manifest_dir,
+            candidate_id=args.candidate_id,
+            manifest_path=args.manifest_path,
+            promotion_decision_id=args.promotion_decision_id,
+            output_path=args.output_path,
+        )
         sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         return 0
 
     raise SystemExit(f"unsupported action: {args.action}")
-
-
-def _persist_unique_artifacts(
-    *,
-    store: SQLiteFactStore,
-    session_id: str,
-    run_id: str,
-    artifacts: list[ArtifactRecord],
-) -> tuple[list[ArtifactRecord], int]:
-    existing = store.list_artifacts(session_id=session_id, run_id=run_id, latest_only=True)
-    seen = {_artifact_signature(artifact) for artifact in existing}
-    persisted: list[ArtifactRecord] = []
-    skipped = 0
-    for artifact in artifacts:
-        signature = _artifact_signature(artifact)
-        if signature in seen:
-            skipped += 1
-            continue
-        persisted.append(artifact)
-        seen.add(signature)
-    if persisted:
-        store.append_artifacts(persisted)
-    return persisted, skipped
-
-
-def _artifact_signature(artifact: ArtifactRecord) -> str:
-    return json.dumps(
-        {
-            "artifact_type": artifact.artifact_type,
-            "target_ref": artifact.target_ref,
-            "producer": artifact.producer,
-            "version": artifact.version,
-            "session_id": artifact.session_id,
-            "run_id": artifact.run_id,
-            "status": artifact.status,
-            "payload": artifact.payload,
-            "metadata": artifact.metadata,
-            "supersedes_artifact_id": artifact.supersedes_artifact_id,
-        },
-        ensure_ascii=True,
-        sort_keys=True,
-    )
 
 
 if __name__ == "__main__":

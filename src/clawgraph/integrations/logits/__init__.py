@@ -1,5 +1,6 @@
 """Logits integration bridges for training, evaluation, and rollout handoff."""
 
+from clawgraph.integrations.logits._compat import describe_logits_runtime
 from clawgraph.integrations.logits.eval_bridge import (
     EvalCase,
     evaluate_candidate_on_suite,
@@ -17,6 +18,10 @@ from clawgraph.integrations.logits.manifests import (
 from clawgraph.integrations.logits.preference_adapter import (
     export_preference_snapshot_for_logits,
 )
+from clawgraph.integrations.logits.registry import (
+    build_training_registry,
+    render_training_registry,
+)
 from clawgraph.integrations.logits.router_bridge import create_router_handoff_manifest
 from clawgraph.integrations.logits.sft_adapter import export_sft_snapshot_for_logits
 from clawgraph.integrations.logits.training_bridge import (
@@ -32,6 +37,8 @@ __all__ = [
     "ModelCandidateManifest",
     "RouterHandoffManifest",
     "TrainingRequestManifest",
+    "build_training_registry",
+    "describe_logits_runtime",
     "create_router_handoff_manifest",
     "evaluate_candidate_on_suite",
     "export_preference_snapshot_for_logits",
@@ -42,7 +49,7 @@ __all__ = [
     "prepare_dpo_training_request",
     "prepare_rl_training_request",
     "prepare_sft_training_request",
+    "render_training_registry",
     "save_manifest",
     "submit_training_request",
 ]
-

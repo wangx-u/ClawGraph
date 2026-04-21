@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:api-auth-smoke": "node ./scripts/control_plane_auth_smoke.mjs",
+    "test:api-load-smoke": "node ./scripts/control_plane_load_smoke.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

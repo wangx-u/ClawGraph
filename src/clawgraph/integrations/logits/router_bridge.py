@@ -10,6 +10,7 @@ from clawgraph.integrations.logits.manifests import (
     RouterHandoffManifest,
     save_manifest,
 )
+from clawgraph.integrations.logits.registry import persist_training_manifest_record
 from clawgraph.store import SQLiteFactStore
 
 
@@ -72,5 +73,16 @@ def create_router_handoff_manifest(
         },
     )
     if output_path is not None:
-        save_manifest(handoff, output_path)
+        destination = save_manifest(handoff, output_path)
+        persist_training_manifest_record(
+            manifest=handoff,
+            store_uri=store_uri,
+            manifest_path=str(destination),
+        )
+    else:
+        persist_training_manifest_record(
+            manifest=handoff,
+            store_uri=store_uri,
+            manifest_path=None,
+        )
     return handoff

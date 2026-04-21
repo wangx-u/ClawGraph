@@ -21,6 +21,7 @@ from clawgraph.protocol.models import (
     PromotionDecisionRecord,
     ScorecardRecord,
     SliceRecord,
+    TrainingAssetRecord,
 )
 from clawgraph.protocol.validation import (
     validate_artifact_record,
@@ -33,6 +34,7 @@ from clawgraph.protocol.validation import (
     validate_promotion_decision_record,
     validate_scorecard_record,
     validate_slice_record,
+    validate_training_asset_record,
 )
 
 _ANNOTATION_ARTIFACT_TYPE = "annotation"
@@ -324,6 +326,37 @@ class SQLiteFactStore:
 
                 CREATE INDEX IF NOT EXISTS idx_promotion_decisions_slice_created
                     ON promotion_decisions(slice_id, created_at DESC, seq DESC);
+
+                CREATE TABLE IF NOT EXISTS training_assets (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asset_id TEXT UNIQUE NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    asset_kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    training_request_id TEXT,
+                    candidate_model_id TEXT,
+                    eval_suite_id TEXT,
+                    dataset_snapshot_id TEXT,
+                    scorecard_id TEXT,
+                    promotion_decision_id TEXT,
+                    slice_id TEXT,
+                    manifest_path TEXT,
+                    created_at TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_training_assets_kind_created
+                    ON training_assets(asset_kind, created_at DESC, seq DESC);
+                CREATE INDEX IF NOT EXISTS idx_training_assets_request_created
+                    ON training_assets(training_request_id, created_at DESC, seq DESC);
+                CREATE INDEX IF NOT EXISTS idx_training_assets_candidate_created
+                    ON training_assets(candidate_model_id, created_at DESC, seq DESC);
+                CREATE INDEX IF NOT EXISTS idx_training_assets_eval_suite_created
+                    ON training_assets(eval_suite_id, created_at DESC, seq DESC);
+                CREATE INDEX IF NOT EXISTS idx_training_assets_snapshot_created
+                    ON training_assets(dataset_snapshot_id, created_at DESC, seq DESC);
 
                 CREATE TABLE IF NOT EXISTS feedback_queue (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1161,6 +1194,167 @@ class SQLiteFactStore:
             rows = connection.execute(query, values).fetchall()
         return [self._row_to_promotion_decision(row) for row in rows]
 
+    def put_training_asset(self, asset: TrainingAssetRecord) -> None:
+        """Upsert one persisted training asset."""
+
+        validate_training_asset_record(asset)
+        created_at = asset.created_at or datetime.now().astimezone()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO training_assets (
+                    asset_id, schema_version, asset_kind, title, status, training_request_id,
+                    candidate_model_id, eval_suite_id, dataset_snapshot_id, scorecard_id,
+                    promotion_decision_id, slice_id, manifest_path, created_at, manifest_json,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(asset_id) DO UPDATE SET
+                    schema_version = excluded.schema_version,
+                    asset_kind = excluded.asset_kind,
+                    title = excluded.title,
+                    status = excluded.status,
+                    training_request_id = excluded.training_request_id,
+                    candidate_model_id = excluded.candidate_model_id,
+                    eval_suite_id = excluded.eval_suite_id,
+                    dataset_snapshot_id = excluded.dataset_snapshot_id,
+                    scorecard_id = excluded.scorecard_id,
+                    promotion_decision_id = excluded.promotion_decision_id,
+                    slice_id = excluded.slice_id,
+                    manifest_path = excluded.manifest_path,
+                    created_at = excluded.created_at,
+                    manifest_json = excluded.manifest_json,
+                    metadata_json = excluded.metadata_json
+                """,
+                [
+                    asset.asset_id,
+                    asset.schema_version,
+                    asset.asset_kind,
+                    asset.title,
+                    asset.status,
+                    asset.training_request_id,
+                    asset.candidate_model_id,
+                    asset.eval_suite_id,
+                    asset.dataset_snapshot_id,
+                    asset.scorecard_id,
+                    asset.promotion_decision_id,
+                    asset.slice_id,
+                    asset.manifest_path,
+                    created_at.isoformat(),
+                    json.dumps(asset.manifest, ensure_ascii=True, sort_keys=True),
+                    json.dumps(asset.metadata, ensure_ascii=True, sort_keys=True),
+                ],
+            )
+            connection.commit()
+
+    def put_training_assets(self, assets: Iterable[TrainingAssetRecord]) -> None:
+        """Upsert multiple persisted training assets in one transaction."""
+
+        prepared = list(assets)
+        if not prepared:
+            return
+        with closing(self._connect()) as connection:
+            for asset in prepared:
+                validate_training_asset_record(asset)
+                created_at = asset.created_at or datetime.now().astimezone()
+                connection.execute(
+                    """
+                    INSERT INTO training_assets (
+                        asset_id, schema_version, asset_kind, title, status, training_request_id,
+                        candidate_model_id, eval_suite_id, dataset_snapshot_id, scorecard_id,
+                        promotion_decision_id, slice_id, manifest_path, created_at, manifest_json,
+                        metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(asset_id) DO UPDATE SET
+                        schema_version = excluded.schema_version,
+                        asset_kind = excluded.asset_kind,
+                        title = excluded.title,
+                        status = excluded.status,
+                        training_request_id = excluded.training_request_id,
+                        candidate_model_id = excluded.candidate_model_id,
+                        eval_suite_id = excluded.eval_suite_id,
+                        dataset_snapshot_id = excluded.dataset_snapshot_id,
+                        scorecard_id = excluded.scorecard_id,
+                        promotion_decision_id = excluded.promotion_decision_id,
+                        slice_id = excluded.slice_id,
+                        manifest_path = excluded.manifest_path,
+                        created_at = excluded.created_at,
+                        manifest_json = excluded.manifest_json,
+                        metadata_json = excluded.metadata_json
+                    """,
+                    [
+                        asset.asset_id,
+                        asset.schema_version,
+                        asset.asset_kind,
+                        asset.title,
+                        asset.status,
+                        asset.training_request_id,
+                        asset.candidate_model_id,
+                        asset.eval_suite_id,
+                        asset.dataset_snapshot_id,
+                        asset.scorecard_id,
+                        asset.promotion_decision_id,
+                        asset.slice_id,
+                        asset.manifest_path,
+                        created_at.isoformat(),
+                        json.dumps(asset.manifest, ensure_ascii=True, sort_keys=True),
+                        json.dumps(asset.metadata, ensure_ascii=True, sort_keys=True),
+                    ],
+                )
+            connection.commit()
+
+    def get_training_asset(self, asset_id: str) -> TrainingAssetRecord | None:
+        """Return one training asset by id."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM training_assets
+                WHERE asset_id = ?
+                LIMIT 1
+                """,
+                [asset_id],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_training_asset(row)
+
+    def list_training_assets(
+        self,
+        *,
+        asset_kind: str | None = None,
+        training_request_id: str | None = None,
+        candidate_model_id: str | None = None,
+        eval_suite_id: str | None = None,
+        dataset_snapshot_id: str | None = None,
+    ) -> list[TrainingAssetRecord]:
+        """List persisted training assets in reverse creation order."""
+
+        query = "SELECT * FROM training_assets"
+        clauses: list[str] = []
+        values: list[str] = []
+        if asset_kind is not None:
+            clauses.append("asset_kind = ?")
+            values.append(asset_kind)
+        if training_request_id is not None:
+            clauses.append("training_request_id = ?")
+            values.append(training_request_id)
+        if candidate_model_id is not None:
+            clauses.append("candidate_model_id = ?")
+            values.append(candidate_model_id)
+        if eval_suite_id is not None:
+            clauses.append("eval_suite_id = ?")
+            values.append(eval_suite_id)
+        if dataset_snapshot_id is not None:
+            clauses.append("dataset_snapshot_id = ?")
+            values.append(dataset_snapshot_id)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC, seq DESC"
+        with closing(self._connect()) as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [self._row_to_training_asset(row) for row in rows]
+
     def append_feedback_queue_item(self, feedback: FeedbackQueueRecord) -> None:
         """Persist one feedback queue item."""
 
@@ -1905,6 +2099,27 @@ class SQLiteFactStore:
             summary=str(row["summary"]),
             rollback_conditions=json.loads(str(row["rollback_conditions_json"])),
             created_at=datetime.fromisoformat(str(row["created_at"])),
+            metadata=json.loads(str(row["metadata_json"])),
+        )
+
+    @staticmethod
+    def _row_to_training_asset(row: sqlite3.Row) -> TrainingAssetRecord:
+        return TrainingAssetRecord(
+            asset_id=str(row["asset_id"]),
+            schema_version=str(row["schema_version"]),
+            asset_kind=str(row["asset_kind"]),
+            title=str(row["title"]),
+            status=str(row["status"]),
+            manifest=json.loads(str(row["manifest_json"])),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            training_request_id=row["training_request_id"],
+            candidate_model_id=row["candidate_model_id"],
+            eval_suite_id=row["eval_suite_id"],
+            dataset_snapshot_id=row["dataset_snapshot_id"],
+            scorecard_id=row["scorecard_id"],
+            promotion_decision_id=row["promotion_decision_id"],
+            slice_id=row["slice_id"],
+            manifest_path=row["manifest_path"],
             metadata=json.loads(str(row["metadata_json"])),
         )
 

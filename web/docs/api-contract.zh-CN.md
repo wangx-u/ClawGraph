@@ -17,7 +17,7 @@
 1. 优先请求真实 HTTP API：`GET /dashboard/bundle`
 2. 若 HTTP API 不可用，且配置了 `CLAWGRAPH_STORE_URI`，则调用本地 bridge：
    - `scripts/prod_dashboard_bundle.py`
-3. 若以上都不可用，则回退到 mock，并把数据源状态标记为 `prod-fallback`
+3. 若以上都不可用，则返回空的 prod bundle，并把数据源状态标记为 `prod-fallback`
 
 ## 环境变量
 
@@ -34,6 +34,13 @@
 
 - Method: `GET`
 - Path: `/dashboard/bundle`
+
+### Mutation Endpoints
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `POST` | `/dashboard/feedback/resolve` | 更新一个反馈事项状态为 `reviewed` 或 `resolved` |
+| `POST` | `/dashboard/feedback/review-override` | 对一个 run 追加人工确认结果，并可同步关闭对应反馈项 |
 
 ### 响应格式
 
@@ -59,6 +66,9 @@ type DashboardBundle = {
   healthMatrix: HealthItem[];
   opportunities: OpportunityItem[];
   risks: RiskItem[];
+  ingestSummary: IngestSummary;
+  workflowLanes: WorkflowLane[];
+  workflowRuns: WorkflowRun[];
   sessions: SessionSummary[];
   replayRecords: ReplayRecord[];
   artifacts: Artifact[];
@@ -70,7 +80,13 @@ type DashboardBundle = {
   evalSuites: EvalSuite[];
   scorecards: Scorecard[];
   coverageRows: CoverageRow[];
+  coverageGuardrails: string[];
   feedbackItems: FeedbackItem[];
+  trainingRegistrySummary: TrainingRegistrySummary;
+  trainingRequests: TrainingRequest[];
+  modelCandidates: ModelCandidate[];
+  evalExecutions: EvalExecution[];
+  routerHandoffs: RouterHandoff[];
   jobs: JobItem[];
 }
 ```
@@ -92,6 +108,11 @@ type DashboardBundle = {
 | `/evaluation` | `evalSuites`, `scorecards` |
 | `/coverage` | `coverageRows` |
 | `/feedback` | `feedbackItems` |
+| `/training` | `trainingRegistrySummary`, `trainingRequests`, `modelCandidates`, `evalExecutions`, `routerHandoffs` |
+| `/training/requests/[requestId]` | `trainingRequests`, `modelCandidates`, `evalExecutions`, `routerHandoffs` |
+| `/training/candidates/[candidateId]` | `modelCandidates`, `trainingRequests`, `evalExecutions`, `routerHandoffs` |
+| `/training/evaluations/[executionId]` | `evalExecutions`, `modelCandidates` |
+| `/training/handoffs/[handoffId]` | `routerHandoffs`, `modelCandidates` |
 
 ## 数据源状态 contract
 
@@ -107,6 +128,7 @@ type DataSourceMeta = {
   provider: "mock" | "remote-http" | "local-store" | "prod-fallback";
   status: "mock" | "prod" | "prod-fallback";
   statusText: string;
+  supportsMutations?: boolean;
 }
 ```
 
@@ -116,6 +138,7 @@ type DataSourceMeta = {
 - `resolvedMode` 表示当前实际使用的数据模式
 - `provider` 表示真实来源
 - `statusText` 直接用于顶部状态栏
+- `supportsMutations` 表示当前数据源是否允许在 Web 内直接执行复核写操作
 
 ## 本地 Store Bridge
 
